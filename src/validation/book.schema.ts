@@ -3,16 +3,48 @@ import { BOOK_FORMATS, BOOK_STATUSES } from "../models/book.model.js";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
+const objectIdListSchema = z
+  .union([z.string(), z.array(z.string())])
+  .optional()
+  .transform((val, ctx) => {
+    if (!val) return undefined;
+    const rawItems = Array.isArray(val)
+      ? val.flatMap((s) => s.split(","))
+      : val.split(",");
+
+    const cleaned = rawItems
+      .map((item) => item.trim())
+      .filter((item) => item.length > 0);
+
+    if (cleaned.length === 0) {
+      return undefined;
+    }
+
+    for (const id of cleaned) {
+      if (!objectIdRegex.test(id)) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: `Invalid ID format: ${id}`,
+        });
+        return z.NEVER;
+      }
+    }
+
+    return cleaned;
+  });
+
 export const bookQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(100).default(20),
   search: z.string().trim().optional(),
-  category: z.string().trim().regex(objectIdRegex, "Invalid category ID").optional(),
-  author: z.string().trim().regex(objectIdRegex, "Invalid author ID").optional(),
-  publisher: z.string().trim().regex(objectIdRegex, "Invalid publisher ID").optional(),
+  category: objectIdListSchema,
+  author: objectIdListSchema,
+  publisher: objectIdListSchema,
   language: z.string().trim().optional(),
   status: z.enum(BOOK_STATUSES).optional(),
-  sortBy: z.enum(["title", "createdAt", "publicationDate"]).default("createdAt"),
+  sortBy: z
+    .enum(["title", "createdAt", "publicationDate", "price", "priceIn"])
+    .default("createdAt"),
   sortOrder: z.enum(["asc", "desc"]).default("desc"),
 });
 
@@ -33,6 +65,8 @@ export const createBookSchema = z.object({
   titleBn: z.string().trim().max(250).optional(),
   legacyId: z.string().trim().optional(),
   legacyBookId: z.string().trim().optional(),
+  price: z.number().nonnegative("Price cannot be negative").optional(),
+  priceIn: z.number().nonnegative("Price cannot be negative").optional(),
   isbn: z
     .string()
     .trim()

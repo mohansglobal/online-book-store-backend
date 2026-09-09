@@ -62,6 +62,16 @@ const bookSchema = new Schema(
       type: String,
       trim: true,
     },
+    price: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
+    priceIn: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
     isbn: {
       type: String,
       unique: true,
@@ -168,6 +178,8 @@ bookSchema.index({ createdBy: 1 });
 bookSchema.index({ status: 1 });
 bookSchema.index({ legacyId: 1 }, { unique: true, sparse: true });
 bookSchema.index({ legacyBookId: 1 }, { sparse: true });
+bookSchema.index({ price: 1 });
+bookSchema.index({ priceIn: 1 });
 bookSchema.index(
   { title: "text", titleBn: "text", description: "text", searchTags: "text" },
   { default_language: "none", language_override: "none" },

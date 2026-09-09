@@ -14,7 +14,8 @@
     "seed:books": "tsx src/scripts/seed-books.ts",
     "verify:models": "tsx src/scripts/verify-book-store-models.ts",
     "test:catalog": "tsx src/scripts/verify-catalog-apis.ts",
-    "audit:joins": "tsx src/scripts/audit-book-joins.ts"
+    "audit:joins": "tsx src/scripts/audit-book-joins.ts",
+    "update:prices": "tsx src/scripts/update-book-prices.ts"
   },
   "keywords": [],
   "author": "",

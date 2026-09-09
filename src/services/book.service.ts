@@ -35,27 +35,59 @@ export const getBooksService = async (query: BookQueryInput) => {
     filter.language = query.language;
   }
 
-  if (query.publisher) {
-    filter.publisher = query.publisher;
+  const publishers = query.publisher
+    ? Array.isArray(query.publisher)
+      ? query.publisher
+      : [query.publisher]
+    : [];
+
+  const authors = query.author
+    ? Array.isArray(query.author)
+      ? query.author
+      : [query.author]
+    : [];
+
+  const categories = query.category
+    ? Array.isArray(query.category)
+      ? query.category
+      : [query.category]
+    : [];
+
+  if (publishers.length) {
+    filter.publisher =
+      publishers.length === 1
+        ? publishers[0]
+        : { $in: publishers };
   }
 
-  if (query.author) {
-    filter.authors = query.author;
+  if (authors.length) {
+    filter.authors =
+      authors.length === 1
+        ? authors[0]
+        : { $in: authors };
   }
 
-  if (query.category) {
-    filter.categories = query.category;
+  if (categories.length) {
+    filter.categories =
+      categories.length === 1
+        ? categories[0]
+        : { $in: categories };
   }
 
   if (query.search) {
-    const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const escapedSearch = query.search.replace(
+      /[.*+?^${}()|[\]\\]/g,
+      "\\$&",
+    );
+
     const searchRegex = new RegExp(escapedSearch, "i");
+
     filter.$or = [
-      { title: { $regex: searchRegex } },
-      { titleBn: { $regex: searchRegex } },
-      { isbn: { $regex: searchRegex } },
-      { searchTags: { $regex: searchRegex } },
-      { description: { $regex: searchRegex } },
+      { title: searchRegex },
+      { titleBn: searchRegex },
+      { isbn: searchRegex },
+      { searchTags: searchRegex },
+      { description: searchRegex },
     ];
   }
 
@@ -68,14 +100,15 @@ export const getBooksService = async (query: BookQueryInput) => {
       .populate("authors", "name nameBn slug photo")
       .populate("publisher", "name nameBn slug logo")
       .populate("categories", "name nameBn slug")
-      .sort({ [query.sortBy]: query.sortOrder === "asc" ? 1 : -1 })
+      .sort({
+        [query.sortBy]: query.sortOrder === "asc" ? 1 : -1,
+      })
       .skip(skip)
       .limit(limit)
       .lean(),
+
     BookModel.countDocuments(filter),
   ]);
-
-  const totalPages = Math.ceil(total / limit) || 1;
 
   return {
     books,
@@ -83,7 +116,7 @@ export const getBooksService = async (query: BookQueryInput) => {
       page,
       limit,
       total,
-      totalPages,
+      totalPages: Math.ceil(total / limit) || 1,
     },
   };
 };
@@ -264,6 +297,8 @@ export const updateBookService = async (
   if (input.images !== undefined) book.images = input.images;
   if (input.status !== undefined) book.status = input.status;
   if (input.translation !== undefined) book.translation = input.translation;
+  if (input.price !== undefined) book.price = input.price;
+  if (input.priceIn !== undefined) book.priceIn = input.priceIn;
 
   await book.save();
 

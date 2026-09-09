@@ -541,6 +541,9 @@ const seedBooks = async () => {
         }
       }
 
+      const rawPriceIn = parseFloat(p.price_in || "0");
+      const rawDiscountIn = parseFloat(p.discount_in || "0");
+
       // Upsert Canonical Book
       const bookDoc = await BookModel.findOneAndUpdate(
         { legacyId: productId },
@@ -551,6 +554,8 @@ const seedBooks = async () => {
             slug,
             legacyId: productId,
             legacyBookId: p.book_id?.trim() || undefined,
+            price: rawPriceIn >= 0 ? rawPriceIn : 0,
+            priceIn: rawPriceIn >= 0 ? rawPriceIn : 0,
             isbn: resolvedIsbn,
             description: p.description?.trim() || rawTitle,
             authors: authorIds,
@@ -574,9 +579,6 @@ const seedBooks = async () => {
       // ==========================================
       // INDIA MARKETPLACE LISTING CREATION
       // ==========================================
-      const rawPriceIn = parseFloat(p.price_in || "0");
-      const rawDiscountIn = parseFloat(p.discount_in || "0");
-
       if (rawPriceIn > 0) {
         const sellingPriceInPaise = Math.round(rawPriceIn * 100);
         let mrpInPaise = sellingPriceInPaise;
