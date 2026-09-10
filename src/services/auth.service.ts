@@ -180,6 +180,7 @@ export const refreshTokenService = async (incomingToken: string) => {
 
   try {
     decoded = verifyRefreshToken(incomingToken);
+    console.log("decoded", decoded);
   } catch {
     throw new AppError(
       "Invalid or expired refresh token",
@@ -191,6 +192,7 @@ export const refreshTokenService = async (incomingToken: string) => {
     token: incomingToken,
     user: decoded.sub,
   });
+  console.log("existingTokenDoc", existingTokenDoc);
 
   if (!existingTokenDoc) {
     throw new AppError(

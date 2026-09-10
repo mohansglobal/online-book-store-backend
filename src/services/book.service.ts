@@ -24,6 +24,8 @@ const slugify = (text: string): string => {
     .replace(/^-+|-+$/g, "");
 };
 
+const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+
 export const getBooksService = async (query: BookQueryInput) => {
   const filter: Record<string, unknown> = {};
 
@@ -35,43 +37,187 @@ export const getBooksService = async (query: BookQueryInput) => {
     filter.language = query.language;
   }
 
-  const publishers = query.publisher
+  const rawPublishers = query.publisher
     ? Array.isArray(query.publisher)
       ? query.publisher
       : [query.publisher]
     : [];
 
-  const authors = query.author
+  const rawAuthors = query.author
     ? Array.isArray(query.author)
       ? query.author
       : [query.author]
     : [];
 
-  const categories = query.category
+  const rawCategories = query.category
     ? Array.isArray(query.category)
       ? query.category
       : [query.category]
     : [];
 
-  if (publishers.length) {
-    filter.publisher =
-      publishers.length === 1
-        ? publishers[0]
-        : { $in: publishers };
-  }
+  const [matchedCategories, matchedAuthors, matchedPublishers] =
+    await Promise.all([
+      rawCategories.length > 0
+        ? CategoryModel.find({
+            $or: [
+              ...(rawCategories.filter((id) => objectIdRegex.test(id)).length > 0
+                ? [
+                    {
+                      _id: {
+                        $in: rawCategories.filter((id) =>
+                          objectIdRegex.test(id),
+                        ),
+                      },
+                    },
+                  ]
+                : []),
+              { slug: { $in: rawCategories.map((s) => s.toLowerCase()) } },
+            ],
+          })
+            .select("_id")
+            .lean()
+        : null,
+      rawAuthors.length > 0
+        ? AuthorModel.find({
+            $or: [
+              ...(rawAuthors.filter((id) => objectIdRegex.test(id)).length > 0
+                ? [
+                    {
+                      _id: {
+                        $in: rawAuthors.filter((id) => objectIdRegex.test(id)),
+                      },
+                    },
+                  ]
+                : []),
+              { slug: { $in: rawAuthors.map((s) => s.toLowerCase()) } },
+            ],
+          })
+            .select("_id")
+            .lean()
+        : null,
+      rawPublishers.length > 0
+        ? PublisherModel.find({
+            $or: [
+              ...(rawPublishers.filter((id) => objectIdRegex.test(id)).length > 0
+                ? [
+                    {
+                      _id: {
+                        $in: rawPublishers.filter((id) =>
+                          objectIdRegex.test(id),
+                        ),
+                      },
+                    },
+                  ]
+                : []),
+              { slug: { $in: rawPublishers.map((s) => s.toLowerCase()) } },
+            ],
+          })
+            .select("_id")
+            .lean()
+        : null,
+    ]);
 
-  if (authors.length) {
-    filter.authors =
-      authors.length === 1
-        ? authors[0]
-        : { $in: authors };
-  }
+  if (rawCategories.length > 0) {
+    const validIds = rawCategories.filter((id) => objectIdRegex.test(id));
+    const matchedCategoryIds = (matchedCategories || []).map((c) =>
+      c._id.toString(),
+    );
+    const allCategoryIds = Array.from(
+      new Set([...validIds, ...matchedCategoryIds]),
+    );
 
-  if (categories.length) {
+    if (allCategoryIds.length === 0) {
+      return {
+        books: [],
+        meta: {
+          page: query.page,
+          limit: query.limit,
+          total: 0,
+          totalPages: 1,
+        },
+      };
+    }
+
     filter.categories =
-      categories.length === 1
-        ? categories[0]
-        : { $in: categories };
+      allCategoryIds.length === 1
+        ? allCategoryIds[0]
+        : { $in: allCategoryIds };
+  }
+
+  if (rawAuthors.length > 0) {
+    const validIds = rawAuthors.filter((id) => objectIdRegex.test(id));
+    const matchedAuthorIds = (matchedAuthors || []).map((a) =>
+      a._id.toString(),
+    );
+    const allAuthorIds = Array.from(
+      new Set([...validIds, ...matchedAuthorIds]),
+    );
+
+    if (allAuthorIds.length === 0) {
+      return {
+        books: [],
+        meta: {
+          page: query.page,
+          limit: query.limit,
+          total: 0,
+          totalPages: 1,
+        },
+      };
+    }
+
+    filter.authors =
+      allAuthorIds.length === 1
+        ? allAuthorIds[0]
+        : { $in: allAuthorIds };
+  }
+
+  if (rawPublishers.length > 0) {
+    const validIds = rawPublishers.filter((id) => objectIdRegex.test(id));
+    const matchedPublisherIds = (matchedPublishers || []).map((p) =>
+      p._id.toString(),
+    );
+    const allPublisherIds = Array.from(
+      new Set([...validIds, ...matchedPublisherIds]),
+    );
+
+    if (allPublisherIds.length === 0) {
+      return {
+        books: [],
+        meta: {
+          page: query.page,
+          limit: query.limit,
+          total: 0,
+          totalPages: 1,
+        },
+      };
+    }
+
+    filter.publisher =
+      allPublisherIds.length === 1
+        ? allPublisherIds[0]
+        : { $in: allPublisherIds };
+  }
+
+  if (query.minPrice !== undefined || query.maxPrice !== undefined) {
+    const priceFilter: Record<string, number> = {};
+    if (query.minPrice !== undefined) {
+      priceFilter.$gte = query.minPrice;
+    }
+    if (query.maxPrice !== undefined) {
+      priceFilter.$lte = query.maxPrice;
+    }
+    filter.price = priceFilter;
+  }
+
+  if (query.minPriceIn !== undefined || query.maxPriceIn !== undefined) {
+    const priceInFilter: Record<string, number> = {};
+    if (query.minPriceIn !== undefined) {
+      priceInFilter.$gte = query.minPriceIn;
+    }
+    if (query.maxPriceIn !== undefined) {
+      priceInFilter.$lte = query.maxPriceIn;
+    }
+    filter.priceIn = priceInFilter;
   }
 
   if (query.search) {
