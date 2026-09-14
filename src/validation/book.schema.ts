@@ -31,6 +31,7 @@ export const bookQuerySchema = z
     publisher: commaSeparatedListSchema,
     publishers: commaSeparatedListSchema,
     language: z.string().trim().optional(),
+    country: z.string().trim().optional(),
     status: z.enum(BOOK_STATUSES).optional(),
     minPrice: z.coerce.number().nonnegative().optional(),
     maxPrice: z.coerce.number().nonnegative().optional(),
@@ -162,6 +163,7 @@ export const bookQuerySchema = z
       author: authors.length > 0 ? authors : undefined,
       publisher: publishers.length > 0 ? publishers : undefined,
       language: data.language,
+      country: data.country,
       status: data.status,
       minPrice,
       maxPrice,
@@ -209,6 +211,11 @@ export const createBookSchema = z.object({
     .array(z.string().trim().regex(objectIdRegex, "Invalid category ID format"))
     .min(1, "A book must belong to at least one category"),
   language: z.string().trim().optional().default("English"),
+  country: z
+    .string()
+    .trim()
+    .regex(objectIdRegex, "Invalid country ID format")
+    .optional(),
   searchTags: z.array(z.string().trim()).optional().default([]),
   format: z.enum(BOOK_FORMATS).optional().default("PAPERBACK"),
   edition: z.string().trim().optional(),

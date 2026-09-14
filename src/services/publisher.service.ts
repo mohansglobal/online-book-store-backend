@@ -1,7 +1,6 @@
 import mongoose from "mongoose";
 
 import { PublisherModel } from "../models/publisher.model.js";
-import { UserModel } from "../models/user.model.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
@@ -152,20 +151,12 @@ export const updatePublisherService = async (
     throw new AppError("Publisher not found", HTTP_STATUS.NOT_FOUND);
   }
 
-  // Check authorization: must be ADMIN or a SELLER linked to this publisher profile
+  // Check authorization: must be ADMIN for MVP independence
   if (userContext.role !== "ADMIN") {
-    const isOwner = await UserModel.exists({
-      _id: userContext.id,
-      publisher: publisher._id,
-      role: "SELLER",
-      isActive: true,
-    });
-    if (!isOwner) {
-      throw new AppError(
-        "Forbidden: You do not own this publisher profile",
-        HTTP_STATUS.FORBIDDEN,
-      );
-    }
+    throw new AppError(
+      "Forbidden: Only administrators can update publisher profiles",
+      HTTP_STATUS.FORBIDDEN,
+    );
   }
 
   if (input.email && input.email.toLowerCase() !== publisher.email) {
@@ -215,17 +206,3 @@ export const updatePublisherService = async (
   return publisher;
 };
 
-export const getMyPublisherProfileService = async (userId: string) => {
-  const user = await UserModel.findById(userId)
-    .populate("publisher")
-    .lean();
-
-  if (!user || !user.publisher) {
-    throw new AppError(
-      "No publisher profile linked to your account",
-      HTTP_STATUS.NOT_FOUND,
-    );
-  }
-
-  return user.publisher;
-};

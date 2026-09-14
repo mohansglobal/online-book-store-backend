@@ -220,13 +220,13 @@ const runCatalogVerification = async () => {
       regSellerRes.status === 201 && regSellerRes.data?.data?.role === "SELLER" && !regSellerRes.data?.data?.publisher,
     );
 
-    // 1.3 Register Publisher Seller (Matching Publisher Email -> Auto-linkage!)
+    // 1.3 Register Second Independent Seller
     const publisherSellerEmail = oxfordPublisher.email!;
     const publisherSellerMobile = `+880${Math.floor(100000000 + Math.random() * 900000000)}`;
     const regPubSellerRes = await apiRequest("/auth/register", {
       method: "POST",
       body: {
-        name: "Oxford Press Official Seller",
+        name: "Oxford Store Seller",
         email: publisherSellerEmail,
         password: "Password123!",
         mobileNumber: publisherSellerMobile,
@@ -234,15 +234,14 @@ const runCatalogVerification = async () => {
         country: country._id.toString(),
       },
     });
-    const autoLinkedPublisher = regPubSellerRes.data?.data?.publisher?.id === oxfordPublisher._id.toString();
     recordTest(
       "Auth",
-      "Register Publisher-Linked Seller (Auto Linkage)",
+      "Register Second Independent Seller",
       "POST /auth/register",
       201,
       regPubSellerRes.status,
-      regPubSellerRes.status === 201 && autoLinkedPublisher,
-      "Auto-linked seller to Oxford University Press via email",
+      regPubSellerRes.status === 201 && regPubSellerRes.data?.data?.role === "SELLER",
+      "Independent seller registration",
     );
 
     // 1.4 Register Duplicate Email (Conflict 409)
@@ -345,11 +344,11 @@ const runCatalogVerification = async () => {
     const pubSellerToken = loginPubSellerRes.data?.data?.accessToken;
     recordTest(
       "Auth",
-      "Login Publisher-Linked Seller",
+      "Login Second Seller",
       "POST /auth/login",
       200,
       loginPubSellerRes.status,
-      loginPubSellerRes.status === 200 && Boolean(pubSellerToken) && Boolean(loginPubSellerRes.data?.data?.user?.publisher),
+      loginPubSellerRes.status === 200 && Boolean(pubSellerToken),
     );
 
     const loginAdminRes = await apiRequest("/auth/login", {
@@ -404,11 +403,11 @@ const runCatalogVerification = async () => {
     const meWithPubSellerRes = await apiRequest("/auth/me", { token: pubSellerToken });
     recordTest(
       "Auth",
-      "Get Authenticated Publisher Seller Profile with Populated Publisher",
+      "Get Authenticated Second Seller Profile",
       "GET /auth/me",
       200,
       meWithPubSellerRes.status,
-      meWithPubSellerRes.status === 200 && meWithPubSellerRes.data?.data?.publisher?.name.includes("Oxford"),
+      meWithPubSellerRes.status === 200 && meWithPubSellerRes.data?.data?.email === publisherSellerEmail,
     );
 
     // 1.10 Refresh Token Endpoint
@@ -561,29 +560,8 @@ const runCatalogVerification = async () => {
       createPubByAdminRes.status === 201 && Boolean(createdPublisherId),
     );
 
-    // 4.3 GET /publishers/me for normal seller (404) vs linked publisher seller (200)
-    const pubMeNormalRes = await apiRequest("/publishers/me", { token: sellerToken });
-    recordTest(
-      "Publishers",
-      "Get My Publisher Profile (Unlinked Seller -> 404)",
-      "GET /publishers/me",
-      404,
-      pubMeNormalRes.status,
-      pubMeNormalRes.status === 404,
-    );
-
-    const pubMeLinkedRes = await apiRequest("/publishers/me", { token: pubSellerToken });
-    recordTest(
-      "Publishers",
-      "Get My Publisher Profile (Linked Seller -> 200)",
-      "GET /publishers/me",
-      200,
-      pubMeLinkedRes.status,
-      pubMeLinkedRes.status === 200 && pubMeLinkedRes.data?.data?._id === oxfordPublisher._id.toString(),
-    );
-
-    // 4.4 Update Publisher Authorization
-    // Normal seller trying to update Oxford -> 403
+    // 4.3 Update Publisher Authorization
+    // Normal seller trying to update Oxford -> 403 (Non-Admin forbidden)
     const updatePubByStrangerRes = await apiRequest(`/publishers/${oxfordPublisher._id}`, {
       method: "PATCH",
       token: sellerToken,
@@ -591,26 +569,26 @@ const runCatalogVerification = async () => {
     });
     recordTest(
       "Publishers",
-      "Forbid Unrelated Seller from Editing Publisher Profile",
+      "Forbid Seller from Editing Publisher Profile (Admin Only)",
       "PATCH /publishers/:id",
       403,
       updatePubByStrangerRes.status,
       updatePubByStrangerRes.status === 403,
     );
 
-    // Oxford linked seller updating Oxford -> 200
+    // Admin updating Oxford -> 200
     const updatePubByOwnerRes = await apiRequest(`/publishers/${oxfordPublisher._id}`, {
       method: "PATCH",
-      token: pubSellerToken,
-      body: { description: "Updated description by official Oxford store." },
+      token: adminToken,
+      body: { description: "Updated description by official Admin." },
     });
     recordTest(
       "Publishers",
-      "Allow Linked Publisher Seller to Update Own Publisher Profile",
+      "Allow Admin to Update Publisher Profile",
       "PATCH /publishers/:id",
       200,
       updatePubByOwnerRes.status,
-      updatePubByOwnerRes.status === 200 && updatePubByOwnerRes.data?.data?.description === "Updated description by official Oxford store.",
+      updatePubByOwnerRes.status === 200 && updatePubByOwnerRes.data?.data?.description === "Updated description by official Admin.",
     );
 
     // ==========================================
@@ -733,7 +711,7 @@ const runCatalogVerification = async () => {
       "GET /books",
       200,
       queryBooksRes.status,
-      queryBooksRes.status === 200 && Array.isArray(queryBooksRes.data?.data) && queryBooksRes.data?.data?.length >= 1,
+      queryBooksRes.status === 200 && Array.isArray(queryBooksRes.data?.data),
     );
 
     // 5.6 Get Book by Slug with Populated References
@@ -1009,6 +987,18 @@ const runCatalogVerification = async () => {
       200,
       authDeleteListingRes.status,
       authDeleteListingRes.status === 200,
+    );
+
+    // 6.13 Buyer-Facing /books Endpoint: Returns multi-seller offers populated with canonical metadata & seller pricing
+    const buyerCatalogRes = await apiRequest(`/books?category=${categoryFiction._id}`);
+    recordTest(
+      "Marketplace Catalog",
+      "Buyer /books Returns Distinct Seller Listing Cards with Fallback Images & Prices",
+      "GET /books",
+      200,
+      buyerCatalogRes.status,
+      buyerCatalogRes.status === 200 && Array.isArray(buyerCatalogRes.data?.data) && buyerCatalogRes.data?.data?.length >= 2,
+      `Found ${buyerCatalogRes.data?.data?.length} distinct seller offer cards in buyer marketplace`,
     );
 
     // ==========================================

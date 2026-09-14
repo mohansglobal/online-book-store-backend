@@ -6,7 +6,6 @@ import {
   getPublisherByIdOrSlugService,
   createPublisherService,
   updatePublisherService,
-  getMyPublisherProfileService,
 } from "../services/publisher.service.js";
 import type {
   PublisherQueryInput,
@@ -37,17 +36,6 @@ export const getPublisherByIdOrSlug = asyncHandler(async (req, res) => {
     res,
     HTTP_STATUS.OK,
     "Publisher retrieved successfully",
-    publisher,
-  );
-});
-
-export const getMyPublisherProfile = asyncHandler(async (req, res) => {
-  const publisher = await getMyPublisherProfileService(req.user!.id);
-
-  apiResponse(
-    res,
-    HTTP_STATUS.OK,
-    "Publisher profile retrieved successfully",
     publisher,
   );
 });

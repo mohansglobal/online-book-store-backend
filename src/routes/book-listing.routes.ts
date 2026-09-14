@@ -12,7 +12,7 @@ import {
   getBookListings,
   getBookListingById,
   createBookListing,
-  updateBookListing,
+  updateBookListing, 
   deleteBookListing,
 } from "../controllers/book-listing.controller.js";
 

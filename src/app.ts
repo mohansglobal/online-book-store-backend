@@ -15,6 +15,12 @@ import authorRouter from "./routes/author.routes.js";
 import publisherRouter from "./routes/publisher.routes.js";
 import bookRouter from "./routes/book.routes.js";
 import bookListingRouter from "./routes/book-listing.routes.js";
+import cartRouter from "./routes/cart.routes.js";
+import orderRouter from "./routes/order.routes.js";
+import wishlistRouter from "./routes/wishlist.routes.js";
+import addressRouter from "./routes/address.routes.js";
+import checkoutRouter from "./routes/checkout.routes.js";
+import reviewRouter from "./routes/review.routes.js";
 
 const app = express();
 
@@ -54,6 +60,12 @@ app.use("/api/v1/authors", authorRouter);
 app.use("/api/v1/publishers", publisherRouter);
 app.use("/api/v1/books", bookRouter);
 app.use("/api/v1/listings", bookListingRouter);
+app.use("/api/v1/cart", cartRouter);
+app.use("/api/v1/orders", orderRouter);
+app.use("/api/v1/wishlist", wishlistRouter);
+app.use("/api/v1/addresses", addressRouter);
+app.use("/api/v1/checkout", checkoutRouter);
+app.use("/api/v1/reviews", reviewRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

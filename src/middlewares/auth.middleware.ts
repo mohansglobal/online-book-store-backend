@@ -49,3 +49,31 @@ export const authorize = (...allowedRoles: string[]) => {
     next();
   };
 };
+
+export const optionalAuthenticate = (
+  req: Request,
+  _res: Response,
+  next: NextFunction,
+): void => {
+  let token: string | undefined = req.cookies?.accessToken as string | undefined;
+
+  const authHeader = req.headers.authorization;
+  if (!token && authHeader && authHeader.startsWith("Bearer ")) {
+    token = authHeader.split(" ")[1];
+  }
+
+  if (token) {
+    try {
+      const payload = verifyAccessToken(token);
+      req.user = {
+        id: payload.sub,
+        role: payload.role,
+      };
+    } catch {
+      // Ignore invalid token for optional auth
+    }
+  }
+
+  next();
+};
+

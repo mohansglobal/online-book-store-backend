@@ -43,15 +43,15 @@ const userSchema = new Schema(
       enum: USER_ROLES,
       default: "BUYER",
     },
-    publisher: {
-      type: Schema.Types.ObjectId,
-      ref: "Publisher",
-    },
     isActive: {
       type: Boolean,
       default: true,
     },
     isEmailVerified: {
+      type: Boolean,
+      default: false,
+    },
+    isMobileVerified: {
       type: Boolean,
       default: false,
     },
@@ -63,7 +63,6 @@ const userSchema = new Schema(
 );
 
 userSchema.index({ country: 1 });
-userSchema.index({ publisher: 1 }, { sparse: true });
 userSchema.index({ mobileNumber: 1 }, { unique: true, sparse: true });
 
 export type UserDocument = InferSchemaType<typeof userSchema>;

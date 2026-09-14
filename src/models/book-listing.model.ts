@@ -52,6 +52,10 @@ const bookListingSchema = new Schema(
       type: String,
       trim: true,
     },
+    listingImages: {
+      type: [String],
+      default: [],
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -70,6 +74,24 @@ bookListingSchema.virtual("discountPercentage").get(function () {
   return Math.round(
     ((this.mrpInPaise - this.sellingPriceInPaise) / this.mrpInPaise) * 100,
   );
+});
+
+bookListingSchema.virtual("effectiveImages").get(function (this: {
+  listingImages?: string[];
+  book?: { images?: string[]; coverImage?: string };
+}) {
+  if (this.listingImages && this.listingImages.length > 0) {
+    return this.listingImages;
+  }
+  if (this.book && typeof this.book === "object") {
+    if (this.book.images && this.book.images.length > 0) {
+      return this.book.images;
+    }
+    if (this.book.coverImage) {
+      return [this.book.coverImage];
+    }
+  }
+  return [];
 });
 
 bookListingSchema.index({ book: 1, seller: 1 }, { unique: true });

@@ -1,7 +1,6 @@
 import bcrypt from "bcryptjs";
 
 import { UserModel } from "../models/user.model.js";
-import { PublisherModel } from "../models/publisher.model.js";
 import { RefreshTokenModel } from "../models/refresh-token.model.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
@@ -11,6 +10,15 @@ import {
   generateRefreshToken,
   verifyRefreshToken,
 } from "../utils/jwt.js";
+import {
+  uploadImageBuffer,
+  deleteImageByPublicId,
+  extractPublicIdFromUrl,
+} from "./cloudinary.service.js";
+import {
+  sendPhoneOtpService,
+  verifyPhoneOtpService,
+} from "./phone-verification.service.js";
 import type { RegisterInput, LoginInput } from "../validation/auth.schema.js";
 
 const BCRYPT_SALT_ROUNDS = 12;
@@ -37,13 +45,6 @@ export const registerUserService = async (input: RegisterInput) => {
     );
   }
 
-  let matchedPublisher = null;
-  if (input.role === "SELLER") {
-    matchedPublisher = await PublisherModel.findOne({
-      $or: [{ email: normalizedEmail }, { phone: trimmedMobile }],
-    });
-  }
-
   const hashedPassword = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
 
   const newUser = await UserModel.create({
@@ -55,18 +56,16 @@ export const registerUserService = async (input: RegisterInput) => {
     postalCode: input.postalCode,
     profilePicture: input.profilePicture,
     role: input.role,
-    publisher: matchedPublisher?._id,
   });
 
-  if (matchedPublisher) {
-    logger.info(
-      {
-        userId: newUser._id,
-        publisherId: matchedPublisher._id,
-        publisherName: matchedPublisher.name,
-      },
-      "Seller successfully linked to publisher profile",
-    );
+  // Automatically trigger OTP dispatch upon registration (5 min validity)
+  try {
+    await sendPhoneOtpService({
+      userId: newUser._id.toString(),
+      mobileNumber: trimmedMobile,
+    });
+  } catch (err) {
+    logger.warn({ err, userId: newUser._id }, "Could not send initial registration OTP SMS");
   }
 
   logger.info(
@@ -74,9 +73,8 @@ export const registerUserService = async (input: RegisterInput) => {
       userId: newUser._id,
       email: normalizedEmail,
       role: newUser.role,
-      isPublisher: Boolean(matchedPublisher),
     },
-    "User registered successfully",
+    "User registered successfully and OTP dispatched",
   );
 
   return {
@@ -88,16 +86,9 @@ export const registerUserService = async (input: RegisterInput) => {
     country: newUser.country,
     postalCode: newUser.postalCode,
     profilePicture: newUser.profilePicture,
-    publisher: matchedPublisher
-      ? {
-          id: matchedPublisher._id,
-          name: matchedPublisher.name,
-          slug: matchedPublisher.slug,
-          logo: matchedPublisher.logo,
-        }
-      : undefined,
     isActive: newUser.isActive,
     isEmailVerified: newUser.isEmailVerified,
+    isMobileVerified: newUser.isMobileVerified,
     createdAt: newUser.createdAt,
     updatedAt: newUser.updatedAt,
   };
@@ -107,8 +98,7 @@ export const loginUserService = async (input: LoginInput) => {
   const trimmedMobile = input.mobileNumber.trim();
 
   const user = await UserModel.findOne({ mobileNumber: trimmedMobile })
-    .select("+password")
-    .populate("publisher", "name nameBn slug logo website");
+    .select("+password");
 
   if (!user) {
     throw new AppError(
@@ -168,7 +158,6 @@ export const loginUserService = async (input: LoginInput) => {
       country: user.country,
       postalCode: user.postalCode,
       profilePicture: user.profilePicture,
-      publisher: user.publisher,
       isActive: user.isActive,
       isEmailVerified: user.isEmailVerified,
     },
@@ -240,12 +229,8 @@ export const refreshTokenService = async (incomingToken: string) => {
 };
 
 export const getMeService = async (userId: string) => {
-
-
-  
   const user = await UserModel.findById(userId)
     .populate("country", "name code phoneCode")
-    .populate("publisher", "name nameBn slug logo website description")
     .lean();
 
   if (!user) {
@@ -268,7 +253,6 @@ export const getMeService = async (userId: string) => {
     country: user.country,
     postalCode: user.postalCode,
     profilePicture: user.profilePicture,
-    publisher: user.publisher,
     isActive: user.isActive,
     isEmailVerified: user.isEmailVerified,
     createdAt: user.createdAt,
@@ -281,3 +265,126 @@ export const logoutUserService = async (token?: string) => {
     await RefreshTokenModel.deleteOne({ token });
   }
 };
+
+export const updateUserProfileImageService = async (
+  userId: string,
+  imageBuffer: Buffer,
+) => {
+  const user = await UserModel.findById(userId);
+
+  if (!user) {
+    throw new AppError("User not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (!user.isActive) {
+    throw new AppError(
+      "Account is inactive or deactivated",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  // Delete previous Cloudinary image if it exists
+  if (user.profilePicture) {
+    const oldPublicId = extractPublicIdFromUrl(user.profilePicture);
+    if (oldPublicId) {
+      try {
+        await deleteImageByPublicId(oldPublicId);
+      } catch (err) {
+        logger.warn({ err, oldPublicId }, "Failed to delete previous profile image from Cloudinary");
+      }
+    }
+  }
+
+  // Upload new image to Cloudinary
+  const uploadResult = await uploadImageBuffer(imageBuffer, {
+    folder: "uploads",
+    transformation: [
+      { width: 500, height: 500, crop: "fill", gravity: "face" },
+      { quality: "auto", fetch_format: "auto" },
+    ],
+  });
+
+  user.profilePicture = uploadResult.secureUrl;
+  await user.save();
+
+  const populatedUser = await UserModel.findById(userId)
+    .populate("country", "name code phoneCode")
+    .lean();
+
+  logger.info({ userId, publicId: uploadResult.publicId }, "Profile picture updated successfully");
+
+  return {
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      mobileNumber: user.mobileNumber,
+      country: populatedUser?.country || user.country,
+      postalCode: user.postalCode,
+      profilePicture: user.profilePicture,
+      isActive: user.isActive,
+      isEmailVerified: user.isEmailVerified,
+      createdAt: user.createdAt,
+      updatedAt: user.updatedAt,
+    },
+    imageUrl: uploadResult.secureUrl,
+    publicId: uploadResult.publicId,
+  };
+};
+
+export const removeUserProfileImageService = async (userId: string) => {
+  const user = await UserModel.findById(userId);
+
+  if (!user) {
+    throw new AppError("User not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (!user.isActive) {
+    throw new AppError(
+      "Account is inactive or deactivated",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  if (!user.profilePicture) {
+    throw new AppError("No profile picture to remove", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const oldPublicId = extractPublicIdFromUrl(user.profilePicture);
+  if (oldPublicId) {
+    try {
+      await deleteImageByPublicId(oldPublicId);
+    } catch (err) {
+      logger.warn({ err, oldPublicId }, "Failed to delete profile picture from Cloudinary");
+    }
+  }
+
+  user.profilePicture = undefined;
+  await user.save();
+
+  const populatedUser = await UserModel.findById(userId)
+    .populate("country", "name code phoneCode")
+    .lean();
+
+  logger.info({ userId }, "Profile picture removed successfully");
+
+  return {
+    id: user._id,
+    name: user.name,
+    email: user.email,
+    role: user.role,
+    mobileNumber: user.mobileNumber,
+    country: populatedUser?.country || user.country,
+    postalCode: user.postalCode,
+    profilePicture: undefined,
+    isActive: user.isActive,
+    isEmailVerified: user.isEmailVerified,
+    createdAt: user.createdAt,
+    updatedAt: user.updatedAt,
+  };
+};
+
+export { sendPhoneOtpService, verifyPhoneOtpService } from "./phone-verification.service.js";
+
+

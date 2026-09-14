@@ -1,9 +1,11 @@
 import mongoose from "mongoose";
 
-import { BookModel } from "../models/book.model.js";
+import { BookModel, type BookDocument } from "../models/book.model.js";
+import { BookListingModel, type BookListingDocument } from "../models/book-listing.model.js";
 import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CategoryModel } from "../models/category.model.js";
+import { CountryModel } from "../models/country.model.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
@@ -26,209 +28,99 @@ const slugify = (text: string): string => {
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
+/**
+ * Buyer-facing /books query:
+ * Returns active marketplace listings with populated canonical book details.
+ * If 20 sellers sell the same book, 20 separate listing cards appear,
+ * each with its own seller-specific price, stock, seller, and images.
+ */
 export const getBooksService = async (query: BookQueryInput) => {
-  const filter: Record<string, unknown> = {};
+  const listingFilter: Record<string, unknown> = {
+    isActive: true,
+  };
 
-  if (query.status) {
-    filter.status = query.status;
-  }
-
-  if (query.language) {
-    filter.language = query.language;
-  }
-
-  const rawPublishers = query.publisher
-    ? Array.isArray(query.publisher)
-      ? query.publisher
-      : [query.publisher]
-    : [];
-
-  const rawAuthors = query.author
-    ? Array.isArray(query.author)
-      ? query.author
-      : [query.author]
-    : [];
-
-  const rawCategories = query.category
-    ? Array.isArray(query.category)
-      ? query.category
-      : [query.category]
-    : [];
-
-  const [matchedCategories, matchedAuthors, matchedPublishers] =
-    await Promise.all([
-      rawCategories.length > 0
-        ? CategoryModel.find({
-            $or: [
-              ...(rawCategories.filter((id) => objectIdRegex.test(id)).length > 0
-                ? [
-                    {
-                      _id: {
-                        $in: rawCategories.filter((id) =>
-                          objectIdRegex.test(id),
-                        ),
-                      },
-                    },
-                  ]
-                : []),
-              { slug: { $in: rawCategories.map((s) => s.toLowerCase()) } },
-            ],
-          })
-            .select("_id")
-            .lean()
-        : null,
-      rawAuthors.length > 0
-        ? AuthorModel.find({
-            $or: [
-              ...(rawAuthors.filter((id) => objectIdRegex.test(id)).length > 0
-                ? [
-                    {
-                      _id: {
-                        $in: rawAuthors.filter((id) => objectIdRegex.test(id)),
-                      },
-                    },
-                  ]
-                : []),
-              { slug: { $in: rawAuthors.map((s) => s.toLowerCase()) } },
-            ],
-          })
-            .select("_id")
-            .lean()
-        : null,
-      rawPublishers.length > 0
-        ? PublisherModel.find({
-            $or: [
-              ...(rawPublishers.filter((id) => objectIdRegex.test(id)).length > 0
-                ? [
-                    {
-                      _id: {
-                        $in: rawPublishers.filter((id) =>
-                          objectIdRegex.test(id),
-                        ),
-                      },
-                    },
-                  ]
-                : []),
-              { slug: { $in: rawPublishers.map((s) => s.toLowerCase()) } },
-            ],
-          })
-            .select("_id")
-            .lean()
-        : null,
-    ]);
-
-  if (rawCategories.length > 0) {
-    const validIds = rawCategories.filter((id) => objectIdRegex.test(id));
-    const matchedCategoryIds = (matchedCategories || []).map((c) =>
-      c._id.toString(),
-    );
-    const allCategoryIds = Array.from(
-      new Set([...validIds, ...matchedCategoryIds]),
-    );
-
-    if (allCategoryIds.length === 0) {
-      return {
-        books: [],
-        meta: {
-          page: query.page,
-          limit: query.limit,
-          total: 0,
-          totalPages: 1,
-        },
-      };
-    }
-
-    filter.categories =
-      allCategoryIds.length === 1
-        ? allCategoryIds[0]
-        : { $in: allCategoryIds };
-  }
-
-  if (rawAuthors.length > 0) {
-    const validIds = rawAuthors.filter((id) => objectIdRegex.test(id));
-    const matchedAuthorIds = (matchedAuthors || []).map((a) =>
-      a._id.toString(),
-    );
-    const allAuthorIds = Array.from(
-      new Set([...validIds, ...matchedAuthorIds]),
-    );
-
-    if (allAuthorIds.length === 0) {
-      return {
-        books: [],
-        meta: {
-          page: query.page,
-          limit: query.limit,
-          total: 0,
-          totalPages: 1,
-        },
-      };
-    }
-
-    filter.authors =
-      allAuthorIds.length === 1
-        ? allAuthorIds[0]
-        : { $in: allAuthorIds };
-  }
-
-  if (rawPublishers.length > 0) {
-    const validIds = rawPublishers.filter((id) => objectIdRegex.test(id));
-    const matchedPublisherIds = (matchedPublishers || []).map((p) =>
-      p._id.toString(),
-    );
-    const allPublisherIds = Array.from(
-      new Set([...validIds, ...matchedPublisherIds]),
-    );
-
-    if (allPublisherIds.length === 0) {
-      return {
-        books: [],
-        meta: {
-          page: query.page,
-          limit: query.limit,
-          total: 0,
-          totalPages: 1,
-        },
-      };
-    }
-
-    filter.publisher =
-      allPublisherIds.length === 1
-        ? allPublisherIds[0]
-        : { $in: allPublisherIds };
-  }
-
+  // Price filters in paise
   if (query.minPrice !== undefined || query.maxPrice !== undefined) {
     const priceFilter: Record<string, number> = {};
     if (query.minPrice !== undefined) {
-      priceFilter.$gte = query.minPrice;
+      priceFilter.$gte = Math.round(query.minPrice * 100);
     }
     if (query.maxPrice !== undefined) {
-      priceFilter.$lte = query.maxPrice;
+      priceFilter.$lte = Math.round(query.maxPrice * 100);
     }
-    filter.price = priceFilter;
+    listingFilter.sellingPriceInPaise = priceFilter;
   }
 
-  if (query.minPriceIn !== undefined || query.maxPriceIn !== undefined) {
-    const priceInFilter: Record<string, number> = {};
-    if (query.minPriceIn !== undefined) {
-      priceInFilter.$gte = query.minPriceIn;
-    }
-    if (query.maxPriceIn !== undefined) {
-      priceInFilter.$lte = query.maxPriceIn;
-    }
-    filter.priceIn = priceInFilter;
+  // Build canonical book filter for metadata search/filtering
+  const bookFilter: Record<string, unknown> = {};
+  let filterBooksNeeded = false;
+
+  if (query.category && query.category.length > 0) {
+    filterBooksNeeded = true;
+    const validIds = query.category.filter((id) => objectIdRegex.test(id));
+    const matchedCategories = await CategoryModel.find({
+      $or: [
+        ...(validIds.length > 0 ? [{ _id: { $in: validIds } }] : []),
+        { slug: { $in: query.category.map((s) => s.toLowerCase()) } },
+      ],
+    })
+      .select("_id")
+      .lean();
+    const allCatIds = Array.from(
+      new Set([...validIds, ...matchedCategories.map((c) => c._id.toString())]),
+    );
+    bookFilter.categories = { $in: allCatIds };
+  }
+
+  if (query.author && query.author.length > 0) {
+    filterBooksNeeded = true;
+    const validIds = query.author.filter((id) => objectIdRegex.test(id));
+    const matchedAuthors = await AuthorModel.find({
+      $or: [
+        ...(validIds.length > 0 ? [{ _id: { $in: validIds } }] : []),
+        { slug: { $in: query.author.map((s) => s.toLowerCase()) } },
+      ],
+    })
+      .select("_id")
+      .lean();
+    const allAuthorIds = Array.from(
+      new Set([...validIds, ...matchedAuthors.map((a) => a._id.toString())]),
+    );
+    bookFilter.authors = { $in: allAuthorIds };
+  }
+
+  if (query.publisher && query.publisher.length > 0) {
+    filterBooksNeeded = true;
+    const validIds = query.publisher.filter((id) => objectIdRegex.test(id));
+    const matchedPublishers = await PublisherModel.find({
+      $or: [
+        ...(validIds.length > 0 ? [{ _id: { $in: validIds } }] : []),
+        { slug: { $in: query.publisher.map((s) => s.toLowerCase()) } },
+      ],
+    })
+      .select("_id")
+      .lean();
+    const allPublisherIds = Array.from(
+      new Set([...validIds, ...matchedPublishers.map((p) => p._id.toString())]),
+    );
+    bookFilter.publisher = { $in: allPublisherIds };
+  }
+
+  if (query.language) {
+    filterBooksNeeded = true;
+    bookFilter.language = query.language;
+  }
+
+  if (query.status) {
+    filterBooksNeeded = true;
+    bookFilter.status = query.status;
   }
 
   if (query.search) {
-    const escapedSearch = query.search.replace(
-      /[.*+?^${}()|[\]\\]/g,
-      "\\$&",
-    );
-
+    filterBooksNeeded = true;
+    const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const searchRegex = new RegExp(escapedSearch, "i");
-
-    filter.$or = [
+    bookFilter.$or = [
       { title: searchRegex },
       { titleBn: searchRegex },
       { isbn: searchRegex },
@@ -237,24 +129,108 @@ export const getBooksService = async (query: BookQueryInput) => {
     ];
   }
 
+  if (filterBooksNeeded) {
+    const matchingBookIds = await BookModel.find(bookFilter).distinct("_id");
+    if (matchingBookIds.length === 0) {
+      return {
+        books: [],
+        meta: {
+          page: query.page,
+          limit: query.limit,
+          total: 0,
+          totalPages: 1,
+        },
+      };
+    }
+    listingFilter.book = { $in: matchingBookIds };
+  }
+
   const page = query.page;
   const limit = query.limit;
   const skip = (page - 1) * limit;
 
-  const [books, total] = await Promise.all([
-    BookModel.find(filter)
-      .populate("authors", "name nameBn slug photo")
-      .populate("publisher", "name nameBn slug logo")
-      .populate("categories", "name nameBn slug")
-      .sort({
-        [query.sortBy]: query.sortOrder === "asc" ? 1 : -1,
+  // Map sort fields to BookListing fields
+  let sortObject: Record<string, 1 | -1> = { sellingPriceInPaise: 1 };
+  if (query.sortBy === "price" || query.sortBy === "priceIn") {
+    sortObject = { sellingPriceInPaise: query.sortOrder === "desc" ? -1 : 1 };
+  } else if (query.sortBy === "createdAt") {
+    sortObject = { createdAt: query.sortOrder === "asc" ? 1 : -1 };
+  }
+
+  const [rawListings, total] = await Promise.all([
+    BookListingModel.find(listingFilter)
+      .populate({
+        path: "book",
+        populate: [
+          { path: "authors", select: "name nameBn slug photo" },
+          { path: "publisher", select: "name nameBn slug logo" },
+          { path: "categories", select: "name nameBn slug" },
+          { path: "country", select: "name code phoneCode" },
+        ],
       })
+      .populate("seller", "name email mobileNumber role profilePicture")
+      .sort(sortObject)
       .skip(skip)
       .limit(limit)
       .lean(),
-
-    BookModel.countDocuments(filter),
+    BookListingModel.countDocuments(listingFilter),
   ]);
+
+  // Transform listings into buyer-facing book cards with fallback images and seller price
+  const books = rawListings.map((listing) => {
+    const bookObj = listing.book as unknown as (BookDocument & {
+      _id: mongoose.Types.ObjectId;
+      country?: unknown;
+    }) | null;
+    const customImages = listing.listingImages ?? [];
+    let effectiveImages: string[] = customImages;
+
+    if (effectiveImages.length === 0 && bookObj) {
+      if (bookObj.images && bookObj.images.length > 0) {
+        effectiveImages = bookObj.images;
+      } else if (bookObj.coverImage) {
+        effectiveImages = [bookObj.coverImage];
+      }
+    }
+
+    return {
+      _id: listing._id,
+      listingId: listing._id,
+      bookId: bookObj?._id,
+      title: bookObj?.title,
+      titleBn: bookObj?.titleBn,
+      slug: bookObj?.slug,
+      isbn: bookObj?.isbn,
+      description: bookObj?.description,
+      authors: bookObj?.authors,
+      publisher: bookObj?.publisher,
+      categories: bookObj?.categories,
+      country: bookObj?.country,
+      language: bookObj?.language,
+      format: bookObj?.format,
+      pages: bookObj?.pages,
+      edition: bookObj?.edition,
+      coverImage: effectiveImages[0] ?? bookObj?.coverImage,
+      images: effectiveImages,
+      listingImages: customImages,
+      price: Math.round(listing.sellingPriceInPaise / 100),
+      priceInPaise: listing.sellingPriceInPaise,
+      mrp: Math.round(listing.mrpInPaise / 100),
+      mrpInPaise: listing.mrpInPaise,
+      discountPercentage:
+        listing.mrpInPaise > 0
+          ? Math.round(
+              ((listing.mrpInPaise - listing.sellingPriceInPaise) /
+                listing.mrpInPaise) *
+                100,
+            )
+          : 0,
+      stock: listing.stock,
+      sku: listing.sku,
+      seller: listing.seller,
+      createdAt: listing.createdAt,
+    };
+  });
 
   return {
     books,
@@ -279,6 +255,7 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
     .populate("authors", "name nameBn slug photo bio")
     .populate("publisher", "name nameBn slug logo website")
     .populate("categories", "name nameBn slug description")
+    .populate("country", "name code phoneCode currency")
     .populate("createdBy", "name email role")
     .lean();
 
@@ -286,7 +263,45 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
     throw new AppError("Book not found", HTTP_STATUS.NOT_FOUND);
   }
 
-  return book;
+  // Fetch all active seller listings for this canonical book sorted by lowest price
+  const rawListings = await BookListingModel.find({
+    book: book._id,
+    isActive: true,
+  })
+    .populate("seller", "name email mobileNumber role profilePicture")
+    .sort({ sellingPriceInPaise: 1 })
+    .lean();
+
+  const listings = rawListings.map((listing) => {
+    const customImages = listing.listingImages ?? [];
+    let effectiveImages: string[] = customImages;
+
+    if (effectiveImages.length === 0) {
+      if (book.images && book.images.length > 0) {
+        effectiveImages = book.images;
+      } else if (book.coverImage) {
+        effectiveImages = [book.coverImage];
+      }
+    }
+
+    return {
+      ...listing,
+      effectiveImages,
+      discountPercentage:
+        listing.mrpInPaise > 0
+          ? Math.round(
+              ((listing.mrpInPaise - listing.sellingPriceInPaise) /
+                listing.mrpInPaise) *
+                100,
+            )
+          : 0,
+    };
+  });
+
+  return {
+    ...book,
+    listings,
+  };
 };
 
 export const createBookService = async (
@@ -322,6 +337,17 @@ export const createBookService = async (
     throw new AppError("One or more referenced categories do not exist or are inactive", HTTP_STATUS.BAD_REQUEST);
   }
 
+  // 3b. Validate country if provided
+  if (input.country) {
+    const countryExists = await CountryModel.exists({
+      _id: input.country,
+      isActive: true,
+    });
+    if (!countryExists) {
+      throw new AppError("Referenced country does not exist or is inactive", HTTP_STATUS.BAD_REQUEST);
+    }
+  }
+
   // 4. Validate ISBN uniqueness if provided
   if (input.isbn && input.isbn.trim()) {
     const existingIsbn = await BookModel.findOne({ isbn: input.isbn.trim() }).lean();
@@ -351,16 +377,35 @@ export const createBookService = async (
     counter++;
   }
 
-  // 6. Create canonical book
+  // 6. Create canonical master book
   const newBook = new BookModel({
-    ...input,
+    title: input.title,
+    titleBn: input.titleBn,
     slug,
+    legacyId: input.legacyId,
+    legacyBookId: input.legacyBookId,
+    isbn: input.isbn,
+    description: input.description,
+    authors: input.authors.map((id) => new mongoose.Types.ObjectId(id)),
+    publisher: new mongoose.Types.ObjectId(input.publisher),
+    categories: input.categories.map((id) => new mongoose.Types.ObjectId(id)),
+    country: input.country ? new mongoose.Types.ObjectId(input.country) : undefined,
+    language: input.language,
+    searchTags: input.searchTags,
+    format: input.format,
+    edition: input.edition,
+    pages: input.pages,
+    publicationDate: input.publicationDate,
+    coverImage: input.coverImage,
+    images: input.images,
+    status: input.status,
+    translation: input.translation,
     createdBy: new mongoose.Types.ObjectId(creatorId),
   });
 
   await newBook.save();
 
-  logger.info({ bookId: newBook._id, title: newBook.title, createdBy: creatorId }, "Book created successfully");
+  logger.info({ bookId: newBook._id, title: newBook.title, createdBy: creatorId }, "Canonical book created successfully");
 
   return newBook;
 };
@@ -419,6 +464,17 @@ export const updateBookService = async (
     book.categories = input.categories.map((catId) => new mongoose.Types.ObjectId(catId)) as unknown as typeof book.categories;
   }
 
+  if (input.country) {
+    const countryExists = await CountryModel.exists({
+      _id: input.country,
+      isActive: true,
+    });
+    if (!countryExists) {
+      throw new AppError("Referenced country does not exist or is inactive", HTTP_STATUS.BAD_REQUEST);
+    }
+    book.country = new mongoose.Types.ObjectId(input.country);
+  }
+
   if (input.isbn && input.isbn.trim() !== book.isbn) {
     const existingIsbn = await BookModel.findOne({
       isbn: input.isbn.trim(),
@@ -443,8 +499,6 @@ export const updateBookService = async (
   if (input.images !== undefined) book.images = input.images;
   if (input.status !== undefined) book.status = input.status;
   if (input.translation !== undefined) book.translation = input.translation;
-  if (input.price !== undefined) book.price = input.price;
-  if (input.priceIn !== undefined) book.priceIn = input.priceIn;
 
   await book.save();
 
@@ -452,3 +506,4 @@ export const updateBookService = async (
 
   return book;
 };
+

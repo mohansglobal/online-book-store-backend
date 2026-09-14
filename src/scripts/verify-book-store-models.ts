@@ -100,14 +100,13 @@ const runVerification = async () => {
       isActive: true,
     });
 
-    // ABC Publication Seller (linked to ABC Publisher)
+    // ABC Publication Seller (Independent seller)
     const abcSeller = await UserModel.create({
       name: "ABC Publication Official Store",
       email: `abc_store_${TEST_PREFIX}@example.com`,
       password: passwordHash,
       mobileNumber: `+91${Math.floor(1000000000 + Math.random() * 9000000000)}`,
       role: "SELLER",
-      publisher: abcPublisher._id,
       country: country._id,
       isActive: true,
     });

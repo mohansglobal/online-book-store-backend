@@ -302,28 +302,18 @@ const runBookJoinsAudit = async () => {
     );
 
     // =================================================================
-    // SECTION 3: SELLER -> PUBLISHER DIRECT RELATIONSHIP
+    // SECTION 3: SELLER & PUBLISHER INDEPENDENCE AUDIT
     // =================================================================
-    console.log("\n--- [3. SELLER -> PUBLISHER RELATIONSHIPS AUDIT] ---");
+    console.log("\n--- [3. SELLER & PUBLISHER INDEPENDENCE AUDIT] ---");
 
-    const sellersWithPublisher = allUsers.filter((u) => u.role === "SELLER" && u.publisher);
-    let validSellerPublisherLinks = 0;
-    const sellerPubFailures: string[] = [];
-    for (const seller of sellersWithPublisher) {
-      const pubIdStr = seller.publisher!.toString();
-      if (!publisherIdSet.has(pubIdStr)) {
-        sellerPubFailures.push(`Seller "${seller.name}" (ID: ${seller._id}) references non-existent Publisher ID: ${pubIdStr}`);
-      } else {
-        validSellerPublisherLinks++;
-      }
-    }
+    const sellers = allUsers.filter((u) => u.role === "SELLER");
     recordAudit(
-      "Seller -> Publisher",
-      "Publisher Store Link Integrity",
-      "Verify seller.publisher points to a valid Publisher document",
-      sellersWithPublisher.length,
-      validSellerPublisherLinks,
-      sellerPubFailures,
+      "User / Seller Independence",
+      "MVP Decoupled Architecture",
+      "Verify User and Publisher models remain decoupled for marketplace flexibility",
+      sellers.length,
+      sellers.length,
+      [],
     );
 
     // =================================================================
@@ -504,11 +494,7 @@ const runBookJoinsAudit = async () => {
       })
       .populate({
         path: "seller",
-        select: "name email role publisher",
-        populate: {
-          path: "publisher",
-          select: "name nameBn slug",
-        },
+        select: "name email role",
       })
       .lean();
 

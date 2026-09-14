@@ -8,6 +8,10 @@ import {
   refreshTokenService,
   getMeService,
   logoutUserService,
+  updateUserProfileImageService,
+  removeUserProfileImageService,
+  sendPhoneOtpService,
+  verifyPhoneOtpService,
 } from "../services/auth.service.js";
 import { env } from "../config/env.js";
 import { ACCESS_TOKEN_COOKIE_MAX_AGE_MS, REFRESH_TOKEN_COOKIE_MAX_AGE_MS } from "../constants/jwt-time.js";
@@ -97,4 +101,60 @@ export const logout = asyncHandler(async (req, res) => {
 
   apiResponse(res, HTTP_STATUS.OK, "Logged out successfully");
 });
+
+export const uploadProfileImage = asyncHandler(async (req, res) => {
+  const file =
+    req.file ||
+    (req.files as Record<string, Express.Multer.File[]> | undefined)?.profilePicture?.[0] ||
+    (req.files as Record<string, Express.Multer.File[]> | undefined)?.image?.[0] ||
+    (req.files as Record<string, Express.Multer.File[]> | undefined)?.avatar?.[0] ||
+    (req.files as Record<string, Express.Multer.File[]> | undefined)?.file?.[0];
+
+  if (!file) {
+    throw new AppError(
+      "No image file provided. Please upload an image under field name 'profilePicture', 'image', 'avatar', or 'file'",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  const result = await updateUserProfileImageService(req.user!.id, file.buffer);
+
+  apiResponse(res, HTTP_STATUS.OK, "Profile image updated successfully", result);
+});
+
+export const removeProfileImage = asyncHandler(async (req, res) => {
+  const user = await removeUserProfileImageService(req.user!.id);
+
+  apiResponse(res, HTTP_STATUS.OK, "Profile image removed successfully", user);
+});
+
+export const sendPhoneOtp = asyncHandler(async (req, res) => {
+  const userId = req.user?.id || (req as any).userId;
+  const mobileNumber = req.body?.mobileNumber;
+
+  const result = await sendPhoneOtpService({
+    userId,
+    mobileNumber,
+  });
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+// Explicit alias as requested
+export const candidatePhoneNumberVerify = sendPhoneOtp;
+
+export const verifyPhoneOtp = asyncHandler(async (req, res) => {
+  const userId = req.user?.id || (req as any).userId;
+  const { mobileNumber, otp } = req.body;
+
+  const result = await verifyPhoneOtpService({
+    userId,
+    mobileNumber,
+    otp,
+  });
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+
 

@@ -11,7 +11,6 @@ import {
 import {
   getPublishers,
   getPublisherByIdOrSlug,
-  getMyPublisherProfile,
   createPublisher,
   updatePublisher,
 } from "../controllers/publisher.controller.js";
@@ -19,12 +18,6 @@ import {
 const router = Router();
 
 router.get("/", validate(publisherQuerySchema, "query"), getPublishers);
-router.get(
-  "/me",
-  authenticate,
-  authorize("SELLER", "ADMIN"),
-  getMyPublisherProfile,
-);
 router.get(
   "/:idOrSlug",
   validate(publisherParamSchema, "params"),

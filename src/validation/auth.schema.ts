@@ -54,3 +54,33 @@ export const loginSchema = z.object({
 });
 
 export type LoginInput = z.infer<typeof loginSchema>;
+
+export const sendOtpSchema = z.object({
+  mobileNumber: z
+    .string()
+    .trim()
+    .min(7, "Mobile number must be at least 7 characters")
+    .max(20, "Mobile number cannot exceed 20 characters")
+    .regex(/^[0-9+\s()-]{7,20}$/, "Invalid mobile number format")
+    .optional(),
+});
+
+export type SendOtpInput = z.infer<typeof sendOtpSchema>;
+
+export const verifyOtpSchema = z.object({
+  mobileNumber: z
+    .string()
+    .trim()
+    .min(7, "Mobile number must be at least 7 characters")
+    .max(20, "Mobile number cannot exceed 20 characters")
+    .regex(/^[0-9+\s()-]{7,20}$/, "Invalid mobile number format")
+    .optional(),
+  otp: z
+    .string()
+    .trim()
+    .min(4, "OTP must be at least 4 digits")
+    .max(8, "OTP cannot exceed 8 digits"),
+});
+
+export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
+

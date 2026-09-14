@@ -120,6 +120,10 @@ const bookSchema = new Schema(
       default: "English",
       trim: true,
     },
+    country: {
+      type: Schema.Types.ObjectId,
+      ref: "Country",
+    },
     searchTags: {
       type: [String],
       default: [],
@@ -174,6 +178,7 @@ const bookSchema = new Schema(
 bookSchema.index({ authors: 1 });
 bookSchema.index({ categories: 1 });
 bookSchema.index({ publisher: 1 });
+bookSchema.index({ country: 1 });
 bookSchema.index({ createdBy: 1 });
 bookSchema.index({ status: 1 });
 bookSchema.index({ legacyId: 1 }, { unique: true, sparse: true });
