@@ -594,3 +594,189 @@ export const calculateReviewStats = async (
     ratingPercentages: percentages,
   };
 };
+
+export interface ListingRatingStats {
+  rating: number;
+  averageRating: number;
+  ratingCount: number;
+  totalRatings: number;
+  totalReviews: number;
+  reviewCount: number;
+}
+
+/**
+ * Fast MongoDB aggregation pipeline to compute average rating and rating counts
+ * for multiple seller-book listings in a single query (prevents N+1 database queries).
+ */
+export const getBatchListingRatingStats = async (
+  items: Array<{
+    bookId?: unknown;
+    sellerId?: unknown;
+    listingId?: unknown;
+  }>,
+): Promise<Map<string, ListingRatingStats>> => {
+  const ratingMap = new Map<string, ListingRatingStats>();
+
+  if (!items || items.length === 0) {
+    return ratingMap;
+  }
+
+  const validPairs: Array<{
+    book: Types.ObjectId;
+    seller: Types.ObjectId;
+    listing?: Types.ObjectId;
+  }> = [];
+
+  for (const item of items) {
+    const rawBook = item.bookId;
+    const rawSeller = item.sellerId;
+    const rawListing = item.listingId;
+
+    let bookStr = "";
+    if (rawBook) {
+      if (typeof rawBook === "object" && rawBook !== null && "_id" in rawBook) {
+        bookStr = String((rawBook as { _id: unknown })._id);
+      } else {
+        bookStr = String(rawBook);
+      }
+    }
+
+    let sellerStr = "";
+    if (rawSeller) {
+      if (typeof rawSeller === "object" && rawSeller !== null && "_id" in rawSeller) {
+        sellerStr = String((rawSeller as { _id: unknown })._id);
+      } else {
+        sellerStr = String(rawSeller);
+      }
+    }
+
+    let listingStr = "";
+    if (rawListing) {
+      if (typeof rawListing === "object" && rawListing !== null && "_id" in rawListing) {
+        listingStr = String((rawListing as { _id: unknown })._id);
+      } else {
+        listingStr = String(rawListing);
+      }
+    }
+
+    const bookValid = bookStr.length > 0 && Types.ObjectId.isValid(bookStr);
+    const sellerValid = sellerStr.length > 0 && Types.ObjectId.isValid(sellerStr);
+
+    if (bookValid && sellerValid) {
+      const bookObj = new Types.ObjectId(bookStr);
+      const sellerObj = new Types.ObjectId(sellerStr);
+      const listingObj =
+        listingStr.length > 0 && Types.ObjectId.isValid(listingStr)
+          ? new Types.ObjectId(listingStr)
+          : undefined;
+
+      validPairs.push({
+        book: bookObj,
+        seller: sellerObj,
+        listing: listingObj,
+      });
+    }
+  }
+
+  if (validPairs.length === 0) {
+    return ratingMap;
+  }
+
+  const matchConditions = validPairs.map((pair) => {
+    if (pair.listing) {
+      return {
+        $or: [
+          { book: pair.book, seller: pair.seller },
+          { bookListing: pair.listing },
+        ],
+      };
+    }
+    return { book: pair.book, seller: pair.seller };
+  });
+
+  const results = await ReviewModel.aggregate([
+    {
+      $match: {
+        status: "APPROVED",
+        $or: matchConditions,
+      },
+    },
+    {
+      $group: {
+        _id: {
+          book: "$book",
+          seller: "$seller",
+        },
+        averageRating: { $avg: "$rating" },
+        totalRatings: { $sum: 1 },
+      },
+    },
+  ]);
+
+  for (const row of results) {
+    const bookIdStr = row._id.book ? row._id.book.toString() : "";
+    const sellerIdStr = row._id.seller ? row._id.seller.toString() : "";
+    const key = `${bookIdStr}_${sellerIdStr}`;
+
+    const rawAvg = row.averageRating || 0;
+    const roundedAvg = Math.round(rawAvg * 10) / 10;
+    const totalCount = row.totalRatings || 0;
+
+    const statsObj: ListingRatingStats = {
+      rating: roundedAvg,
+      averageRating: roundedAvg,
+      ratingCount: totalCount,
+      totalRatings: totalCount,
+      totalReviews: totalCount,
+      reviewCount: totalCount,
+    };
+
+    ratingMap.set(key, statsObj);
+  }
+
+  return ratingMap;
+};
+
+/**
+ * Safely extracts rating stats for a specific book + seller pair from the pre-aggregated map.
+ */
+export const getListingRatingFromMap = (
+  ratingMap: Map<string, ListingRatingStats>,
+  bookId?: unknown,
+  sellerId?: unknown,
+): ListingRatingStats => {
+  let bStr = "";
+  if (bookId) {
+    if (typeof bookId === "object" && bookId !== null && "_id" in bookId) {
+      bStr = (bookId as { _id: unknown })._id ? String((bookId as { _id: unknown })._id) : "";
+    } else {
+      bStr = String(bookId);
+    }
+  }
+
+  let sStr = "";
+  if (sellerId) {
+    if (typeof sellerId === "object" && sellerId !== null && "_id" in sellerId) {
+      sStr = (sellerId as { _id: unknown })._id ? String((sellerId as { _id: unknown })._id) : "";
+    } else {
+      sStr = String(sellerId);
+    }
+  }
+
+  const key = `${bStr}_${sStr}`;
+  const found = ratingMap.get(key);
+
+  if (found) {
+    return found;
+  }
+
+  return {
+    rating: 0,
+    averageRating: 0,
+    ratingCount: 0,
+    totalRatings: 0,
+    totalReviews: 0,
+    reviewCount: 0,
+  };
+};
+

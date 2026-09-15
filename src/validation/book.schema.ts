@@ -182,6 +182,12 @@ export const bookParamSchema = z.object({
 
 export type BookParamInput = z.infer<typeof bookParamSchema>;
 
+export const bookIsbnParamSchema = z.object({
+  isbn: z.string().trim().min(3, "ISBN is required"),
+});
+
+export type BookIsbnParamInput = z.infer<typeof bookIsbnParamSchema>;
+
 export const createBookSchema = z.object({
   title: z
     .string()

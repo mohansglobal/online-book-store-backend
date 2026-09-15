@@ -3,6 +3,10 @@ import mongoose from "mongoose";
 import { WishlistModel } from "../models/wishlist.model.js";
 import { BookModel, type BookDocument } from "../models/book.model.js";
 import { BookListingModel } from "../models/book-listing.model.js";
+import {
+  getBatchListingRatingStats,
+  getListingRatingFromMap,
+} from "./review.service.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
@@ -47,6 +51,15 @@ export const getWishlistService = async (userId: string) => {
         .lean()
     : [];
 
+  // Batch compute ratings for the active listings
+  const ratingMap = await getBatchListingRatingStats(
+    activeListings.map((l) => ({
+      bookId: l.book,
+      sellerId: l.seller,
+      listingId: l._id,
+    })),
+  );
+
   // Group listings by book ID
   const listingsByBook = new Map<string, any[]>();
   for (const listing of activeListings) {
@@ -75,6 +88,17 @@ export const getWishlistService = async (userId: string) => {
       const fallbackImage =
         customImages[0] ?? book.coverImage ?? book.images?.[0] ?? "";
 
+      const ratingInfo = bestListing
+        ? getListingRatingFromMap(ratingMap, book._id, bestListing.seller)
+        : {
+            rating: 0,
+            averageRating: 0,
+            ratingCount: 0,
+            totalRatings: 0,
+            totalReviews: 0,
+            reviewCount: 0,
+          };
+
       return {
         id: book._id,
         bookId: book._id,
@@ -96,6 +120,12 @@ export const getWishlistService = async (userId: string) => {
         mrpInRupees,
         inStock,
         totalStock,
+        rating: ratingInfo.rating,
+        averageRating: ratingInfo.averageRating,
+        ratingCount: ratingInfo.ratingCount,
+        totalRatings: ratingInfo.totalRatings,
+        totalReviews: ratingInfo.totalReviews,
+        reviewCount: ratingInfo.reviewCount,
         addedAt: item.addedAt,
       };
     });

@@ -12,17 +12,31 @@ export const shippingAddressSchema = z.object({
   country: z.string().trim().min(1, "Country is required"),
 });
 
-export const checkoutItemSchema = z.object({
-  bookListing: z
-    .string()
-    .trim()
-    .regex(objectIdRegex, "Invalid book listing ID format"),
-  quantity: z
-    .number()
-    .int("Quantity must be an integer")
-    .positive("Quantity must be at least 1")
-    .default(1),
-});
+export const checkoutItemSchema = z
+  .object({
+    bookListing: z
+      .string()
+      .trim()
+      .regex(objectIdRegex, "Invalid book listing ID format")
+      .optional(),
+    bookListingId: z
+      .string()
+      .trim()
+      .regex(objectIdRegex, "Invalid book listing ID format")
+      .optional(),
+    quantity: z.coerce
+      .number()
+      .int("Quantity must be an integer")
+      .min(1, "Quantity must be at least 1")
+      .max(20, "Quantity cannot exceed 20")
+      .default(1),
+  })
+  .refine((data) => Boolean(data.bookListing || data.bookListingId), {
+    message: "Either bookListing or bookListingId must be provided",
+    path: ["bookListingId"],
+  });
+
+
 
 export const createOrderSchema = z
   .object({

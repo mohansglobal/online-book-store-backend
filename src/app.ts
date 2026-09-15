@@ -21,6 +21,7 @@ import wishlistRouter from "./routes/wishlist.routes.js";
 import addressRouter from "./routes/address.routes.js";
 import checkoutRouter from "./routes/checkout.routes.js";
 import reviewRouter from "./routes/review.routes.js";
+import countryRouter from "./routes/country.routes.js";
 
 const app = express();
 
@@ -58,8 +59,10 @@ app.use("/api/v1/auth", authRouter);
 app.use("/api/v1/categories", categoryRouter);
 app.use("/api/v1/authors", authorRouter);
 app.use("/api/v1/publishers", publisherRouter);
+app.use("/api/v1/countries", countryRouter);
 app.use("/api/v1/books", bookRouter);
 app.use("/api/v1/listings", bookListingRouter);
+app.use("/api/v1/book-listings", bookListingRouter);
 app.use("/api/v1/cart", cartRouter);
 app.use("/api/v1/orders", orderRouter);
 app.use("/api/v1/wishlist", wishlistRouter);

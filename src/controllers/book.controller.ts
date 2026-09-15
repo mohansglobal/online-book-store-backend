@@ -4,6 +4,7 @@ import { HTTP_STATUS } from "../constants/http-status.js";
 import {
   getBooksService,
   getBookByIdOrSlugService,
+  lookupBookByIsbnService,
   createBookService,
   updateBookService,
 } from "../services/book.service.js";
@@ -27,6 +28,25 @@ export const getBookByIdOrSlug = asyncHandler(async (req, res) => {
   apiResponse(res, HTTP_STATUS.OK, "Book retrieved successfully", book);
 });
 
+export const lookupBookByIsbn = asyncHandler(async (req, res) => {
+  const sellerId = req.user?.id;
+  const result = await lookupBookByIsbnService(
+    req.params.isbn as string,
+    sellerId,
+  );
+
+  return res.status(HTTP_STATUS.OK).json({
+    success: true,
+    exists: result.exists,
+    alreadyListedBySeller: result.alreadyListedBySeller,
+    existingListingId: result.existingListingId,
+    message: result.exists
+      ? "Book found in catalog"
+      : "No Book found with this ISBN",
+    data: result.book,
+  });
+});
+
 export const createBook = asyncHandler(async (req, res) => {
   const book = await createBookService(
     req.body as CreateBookInput,
@@ -45,3 +65,4 @@ export const updateBook = asyncHandler(async (req, res) => {
 
   apiResponse(res, HTTP_STATUS.OK, "Book updated successfully", book);
 });
+

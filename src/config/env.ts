@@ -22,6 +22,17 @@ const envSchema = z.object({
   SMS_CLIENT_ID: z.string().min(1, "SMS_CLIENT_ID cannot be empty").optional(),
   SMS_SENDER_ID: z.string().default("GEISIL"),
   SMS_BASE_URL: z.string().default("https://api.mylogin.co.in"),
+  REDIS_HOST: z.string().default("127.0.0.1"),
+  REDIS_PORT: z.coerce.number().default(6379),
+  REDIS_PASSWORD: z.string().optional(),
+  REDIS_URL: z.string().optional(),
+  EMAIL_HOST: z.string().default("smtp.hostinger.com"),
+  EMAIL_PORT: z.coerce.number().default(465),
+  EMAIL_USER: z.string().optional(),
+  EMAIL_PASS: z.string().optional(),
+  SMTP_KYC_USER: z.string().optional(),
+  SMTP_KYC_PASS: z.string().optional(),
+  EMAIL_FROM: z.string().default("Online BookStore <info@geisil.com>"),
 });
 
 const parsedEnv = envSchema.safeParse(process.env);

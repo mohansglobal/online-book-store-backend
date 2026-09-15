@@ -41,47 +41,70 @@ export const getCheckoutSummaryService = async (
 ): Promise<CheckoutSummary> => {
   const issues: CheckoutIssue[] = [];
 
-  // 1. Fetch user's cart
-  const cart = await CartModel.findOne({ user: userId }).lean();
-  const rawCartItems = cart?.items ?? [];
+  // 1. Resolve checkout source items (Direct Buy Now or Cart)
+  let rawCheckoutItems: Array<{ bookListing: mongoose.Types.ObjectId; quantity: number }> = [];
+  const isDirectCheckout = Boolean(query.bookListingId);
+
+  if (isDirectCheckout) {
+    const listingId = new mongoose.Types.ObjectId(query.bookListingId);
+    const quantity = query.quantity ?? 1;
+
+    rawCheckoutItems = [
+      {
+        bookListing: listingId,
+        quantity,
+      },
+    ];
+  } else {
+    const cart = await CartModel.findOne({ user: userId }).lean();
+    rawCheckoutItems = (cart?.items ?? []).map((item) => ({
+      bookListing: item.bookListing as mongoose.Types.ObjectId,
+      quantity: item.quantity,
+    }));
+  }
 
   // 2. Batch-fetch all BookListings in one single query to prevent N+1 queries
-  const listingIds = rawCartItems.map((item) => item.bookListing);
+  const listingIds = rawCheckoutItems.map((item) => item.bookListing);
 
-  const listings = listingIds.length > 0
-    ? ((await BookListingModel.find({ _id: { $in: listingIds } })
-        .populate({
-          path: "book",
-          select: "title titleBn coverImage images authors format",
-          populate: {
-            path: "authors",
-            select: "name nameBn",
-          },
-        })
-        .populate("seller", "name email")
-        .lean()) as unknown as PopulatedListing[])
-    : [];
+  const listings =
+    listingIds.length > 0
+      ? ((await BookListingModel.find({ _id: { $in: listingIds } })
+          .populate({
+            path: "book",
+            select: "title titleBn coverImage images authors format status",
+            populate: {
+              path: "authors",
+              select: "name nameBn",
+            },
+          })
+          .populate("seller", "name email isActive")
+          .lean()) as unknown as PopulatedListing[])
+      : [];
 
   const listingMap = new Map<string, PopulatedListing>();
   for (const listing of listings) {
     listingMap.set(listing._id.toString(), listing);
   }
 
-  // 3. Process cart items and assess stock/availability
+  // 3. Process checkout items and assess stock/availability
   const items: CheckoutItem[] = [];
   let mrpTotalInPaise = 0;
   let subtotalInPaise = 0;
   let totalQuantity = 0;
   let availableItemsCount = 0;
 
-  for (const cartItem of rawCartItems) {
-    const listingIdStr = cartItem.bookListing.toString();
+  for (const checkoutItem of rawCheckoutItems) {
+    const listingIdStr = checkoutItem.bookListing.toString();
     const listing = listingMap.get(listingIdStr);
 
     let isAvailable = true;
     let unavailableReason: UnavailableReason | undefined = undefined;
 
-    if (!listing || !listing.isActive) {
+    const isListingActive = listing?.isActive ?? false;
+    const isBookActive = listing?.book?.status ? listing.book.status === "ACTIVE" : true;
+    const isSellerActive = listing?.seller ? (listing.seller as { isActive?: boolean }).isActive !== false : true;
+
+    if (!listing || !isListingActive || !isBookActive || !isSellerActive) {
       isAvailable = false;
       unavailableReason = "LISTING_INACTIVE";
       issues.push({
@@ -97,7 +120,7 @@ export const getCheckoutSummaryService = async (
         message: `"${listing.book?.title || "Item"}" is out of stock`,
         bookListingId: listingIdStr,
       });
-    } else if (listing.stock < cartItem.quantity) {
+    } else if (listing.stock < checkoutItem.quantity) {
       isAvailable = false;
       unavailableReason = "INSUFFICIENT_STOCK";
       issues.push({
@@ -109,14 +132,14 @@ export const getCheckoutSummaryService = async (
 
     const mrp = listing?.mrpInPaise ?? listing?.sellingPriceInPaise ?? 0;
     const sellingPrice = listing?.sellingPriceInPaise ?? 0;
-    const itemSubtotal = sellingPrice * cartItem.quantity;
-    const itemDiscount = Math.max(0, (mrp - sellingPrice) * cartItem.quantity);
+    const itemSubtotal = sellingPrice * checkoutItem.quantity;
+    const itemDiscount = Math.max(0, (mrp - sellingPrice) * checkoutItem.quantity);
 
     // Only available items accumulate towards order subtotal
     if (isAvailable) {
-      mrpTotalInPaise += mrp * cartItem.quantity;
+      mrpTotalInPaise += mrp * checkoutItem.quantity;
       subtotalInPaise += itemSubtotal;
-      totalQuantity += cartItem.quantity;
+      totalQuantity += checkoutItem.quantity;
       availableItemsCount += 1;
     }
 
@@ -146,7 +169,7 @@ export const getCheckoutSummaryService = async (
       author: authorString,
       format: listing?.book?.format ?? "Paperback",
       coverImage,
-      quantity: cartItem.quantity,
+      quantity: checkoutItem.quantity,
       stockAvailable: listing?.stock ?? 0,
       isAvailable,
       ...(unavailableReason ? { unavailableReason } : {}),
@@ -161,7 +184,7 @@ export const getCheckoutSummaryService = async (
     });
   }
 
-  if (rawCartItems.length === 0) {
+  if (!isDirectCheckout && rawCheckoutItems.length === 0) {
     issues.push({
       code: "EMPTY_CART",
       message: "Your cart is currently empty",

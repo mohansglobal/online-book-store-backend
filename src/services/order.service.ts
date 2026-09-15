@@ -5,6 +5,7 @@ import { BookListingModel, type BookListingDocument } from "../models/book-listi
 import { BookModel, type BookDocument } from "../models/book.model.js";
 import { CartModel } from "../models/cart.model.js";
 import { AddressModel } from "../models/address.model.js";
+import { UserModel } from "../models/user.model.js";
 import { CHECKOUT_CONFIG, ACTIVE_PROMO_RULES } from "../constants/checkout.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
@@ -14,6 +15,11 @@ import {
   verifyRazorpaySignature,
   createRazorpayGatewayOrder,
 } from "./payment.service.js";
+import {
+  dispatchOrderConfirmationJob,
+  dispatchSellerNewOrderAlertJob,
+  dispatchOrderCancellationJob,
+} from "../queues/email.queue.js";
 import type {
   CreateOrderInput,
   OrderQueryInput,
@@ -26,6 +32,123 @@ const generateOrderNumber = (): string => {
   const timestamp = Date.now().toString(36).toUpperCase();
   const random = Math.floor(1000 + Math.random() * 9000).toString();
   return `ORD-${timestamp}-${random}`;
+};
+
+/**
+ * Dispatches order confirmation email to buyer and alerts to respective sellers in the background queue.
+ */
+const sendSuccessfulOrderNotifications = async (
+  order: OrderDocument & { _id: mongoose.Types.ObjectId },
+) => {
+  try {
+    const buyerId = order.buyer.toString();
+    const buyer = await UserModel.findById(buyerId).lean();
+
+    const buyerEmail = order.shippingAddress?.email || buyer?.email;
+    const buyerName =
+      order.shippingAddress?.fullName || buyer?.name || "Valued Customer";
+
+    if (buyerEmail) {
+      const emailItems = order.items.map((item) => ({
+        title: item.title,
+        quantity: item.quantity,
+        priceInPaise: item.priceInPaise,
+        subtotalInPaise: item.subtotalInPaise,
+      }));
+
+      await dispatchOrderConfirmationJob({
+        toEmail: buyerEmail,
+        buyerName,
+        orderNumber: order.orderNumber,
+        orderId: order._id.toString(),
+        items: emailItems,
+        subtotalInPaise: order.subtotalInPaise ?? 0,
+        deliveryChargeInPaise: order.deliveryChargeInPaise ?? 0,
+        couponDiscountInPaise: order.couponDiscountInPaise ?? 0,
+        totalAmountInPaise: order.totalAmountInPaise,
+        paymentMethod: order.paymentMethod,
+        shippingAddress: {
+          fullName: order.shippingAddress?.fullName || buyerName,
+          streetAddress:
+            order.shippingAddress?.streetAddress ||
+            order.shippingAddress?.street ||
+            "",
+          city: order.shippingAddress?.city || "",
+          state: order.shippingAddress?.state || "",
+          postalCode: order.shippingAddress?.postalCode || "",
+          country: order.shippingAddress?.country || "",
+        },
+      });
+    }
+
+    // Group order items by seller and send individual alerts
+    const sellerItemsMap = new Map<
+      string,
+      { title: string; quantity: number; subtotalInPaise: number }[]
+    >();
+
+    for (const item of order.items) {
+      const sellerIdStr = item.seller.toString();
+      const existing = sellerItemsMap.get(sellerIdStr) || [];
+      existing.push({
+        title: item.title,
+        quantity: item.quantity,
+        subtotalInPaise: item.subtotalInPaise,
+      });
+      sellerItemsMap.set(sellerIdStr, existing);
+    }
+
+    for (const [sellerId, sellerItems] of sellerItemsMap.entries()) {
+      const seller = await UserModel.findById(sellerId).lean();
+      if (seller?.email) {
+        await dispatchSellerNewOrderAlertJob({
+          toEmail: seller.email,
+          sellerName: seller.name || "Seller",
+          orderNumber: order.orderNumber,
+          orderId: order._id.toString(),
+          items: sellerItems,
+        });
+      }
+    }
+  } catch (error) {
+    logger.error(
+      { error, orderId: order._id, orderNumber: order.orderNumber },
+      "Failed to dispatch background order confirmation email jobs",
+    );
+  }
+};
+
+/**
+ * Dispatches order cancellation email notice in the background queue.
+ */
+const sendOrderCancellationNotifications = async (
+  order: OrderDocument & { _id: mongoose.Types.ObjectId },
+) => {
+  try {
+    const buyerId = order.buyer.toString();
+    const buyer = await UserModel.findById(buyerId).lean();
+
+    const recipientEmail = order.shippingAddress?.email || buyer?.email;
+    const recipientName =
+      order.shippingAddress?.fullName || buyer?.name || "Valued Customer";
+
+    if (recipientEmail) {
+      await dispatchOrderCancellationJob({
+        toEmail: recipientEmail,
+        recipientName,
+        orderNumber: order.orderNumber,
+        orderId: order._id.toString(),
+        reason: order.cancellationReason || "Cancelled by user",
+        refundStatus: order.refundStatus || "NONE",
+        totalAmountInPaise: order.totalAmountInPaise,
+      });
+    }
+  } catch (error) {
+    logger.error(
+      { error, orderId: order._id, orderNumber: order.orderNumber },
+      "Failed to dispatch order cancellation email job",
+    );
+  }
 };
 
 export const createOrderService = async (
@@ -104,12 +227,19 @@ export const createOrderService = async (
     billingAddressPayload = shippingAddressPayload;
   }
 
-  // 2. Validate Cart & items
+  // 2. Validate Cart & items (Direct Buy Now or Cart Checkout)
+  const hasDirectItems = Array.isArray(input.items) && input.items.length > 0;
   let checkoutItems: { bookListing: string; quantity: number }[] = [];
   let isCartCheckout = false;
 
-  if (input.items && input.items.length > 0) {
-    checkoutItems = input.items;
+  if (hasDirectItems) {
+    checkoutItems = input.items!.map((item) => {
+      const listingId = (item.bookListingId || item.bookListing || "").trim();
+      return {
+        bookListing: listingId,
+        quantity: item.quantity,
+      };
+    });
   } else {
     // Load from Cart
     const cart = await CartModel.findOne({ user: buyerId }).lean();
@@ -170,7 +300,7 @@ export const createOrderService = async (
       | (BookDocument & { _id: mongoose.Types.ObjectId })
       | null;
 
-    if (!bookDoc) {
+    if (!bookDoc || bookDoc.status !== "ACTIVE") {
       // Rollback current and previous
       await BookListingModel.findByIdAndUpdate(updatedListing._id, {
         $inc: { stock: item.quantity },
@@ -180,7 +310,10 @@ export const createOrderService = async (
           $inc: { stock: acquired.quantity },
         });
       }
-      throw new AppError("Canonical book for listing not found", HTTP_STATUS.NOT_FOUND);
+      throw new AppError(
+        "Canonical book for listing is unavailable or inactive",
+        HTTP_STATUS.BAD_REQUEST,
+      );
     }
 
     const priceInPaise = updatedListing.sellingPriceInPaise;
@@ -346,6 +479,11 @@ export const createOrderService = async (
       { user: buyerId },
       { $set: { items: [] } },
     );
+  }
+
+  // 6. Trigger background email notifications if order is confirmed (e.g. COD or pre-verified)
+  if (newOrder.orderStatus === "CONFIRMED") {
+    void sendSuccessfulOrderNotifications(newOrder);
   }
 
   logger.info(
@@ -591,6 +729,9 @@ export const cancelOrderService = async (
 
   await order.save();
 
+  // Trigger background order cancellation email notification
+  void sendOrderCancellationNotifications(order);
+
   logger.info(
     {
       orderId: order._id,
@@ -653,6 +794,9 @@ export const verifyOrderPaymentService = async (
 
   await order.save();
 
+  // Trigger background order confirmation notifications once payment is verified
+  void sendSuccessfulOrderNotifications(order);
+
   logger.info(
     {
       orderId: order._id,
@@ -669,10 +813,17 @@ export const initiateRazorpayOrderService = async (
   buyerId: string,
   input: InitiateRazorpayOrderInput,
 ) => {
+  const hasDirectItems = Array.isArray(input.items) && input.items.length > 0;
   let checkoutItems: { bookListing: string; quantity: number }[] = [];
 
-  if (input.items && input.items.length > 0) {
-    checkoutItems = input.items;
+  if (hasDirectItems) {
+    checkoutItems = input.items!.map((item) => {
+      const listingId = (item.bookListingId || item.bookListing || "").trim();
+      return {
+        bookListing: listingId,
+        quantity: item.quantity,
+      };
+    });
   } else {
     const cart = await CartModel.findOne({ user: buyerId }).lean();
     if (!cart || cart.items.length === 0) {

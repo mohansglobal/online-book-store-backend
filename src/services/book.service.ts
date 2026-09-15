@@ -6,6 +6,11 @@ import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CategoryModel } from "../models/category.model.js";
 import { CountryModel } from "../models/country.model.js";
+import {
+  getBatchListingRatingStats,
+  getListingRatingFromMap,
+  calculateReviewStats,
+} from "./review.service.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
@@ -176,7 +181,16 @@ export const getBooksService = async (query: BookQueryInput) => {
     BookListingModel.countDocuments(listingFilter),
   ]);
 
-  // Transform listings into buyer-facing book cards with fallback images and seller price
+  // Batch compute seller book ratings in a single aggregation query
+  const itemsForRatings = rawListings.map((listing) => ({
+    bookId: (listing.book as { _id?: unknown })?._id || listing.book,
+    sellerId: (listing.seller as { _id?: unknown })?._id || listing.seller,
+    listingId: listing._id,
+  }));
+
+  const ratingMap = await getBatchListingRatingStats(itemsForRatings);
+
+  // Transform listings into buyer-facing book cards with fallback images, seller price, and ratings
   const books = rawListings.map((listing) => {
     const bookObj = listing.book as unknown as (BookDocument & {
       _id: mongoose.Types.ObjectId;
@@ -192,6 +206,10 @@ export const getBooksService = async (query: BookQueryInput) => {
         effectiveImages = [bookObj.coverImage];
       }
     }
+
+    const bookId = bookObj?._id || listing.book;
+    const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+    const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
 
     return {
       _id: listing._id,
@@ -228,6 +246,12 @@ export const getBooksService = async (query: BookQueryInput) => {
       stock: listing.stock,
       sku: listing.sku,
       seller: listing.seller,
+      rating: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+      ratingCount: ratingInfo.ratingCount,
+      totalRatings: ratingInfo.totalRatings,
+      totalReviews: ratingInfo.totalReviews,
+      reviewCount: ratingInfo.reviewCount,
       createdAt: listing.createdAt,
     };
   });
@@ -272,6 +296,17 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
     .sort({ sellingPriceInPaise: 1 })
     .lean();
 
+  const [bookOverallReviewStats, listingRatingMap] = await Promise.all([
+    calculateReviewStats(book._id as mongoose.Types.ObjectId),
+    getBatchListingRatingStats(
+      rawListings.map((l) => ({
+        bookId: book._id as mongoose.Types.ObjectId,
+        sellerId: (l.seller as { _id?: unknown })?._id || l.seller,
+        listingId: l._id,
+      })),
+    ),
+  ]);
+
   const listings = rawListings.map((listing) => {
     const customImages = listing.listingImages ?? [];
     let effectiveImages: string[] = customImages;
@@ -284,6 +319,13 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
       }
     }
 
+    const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+    const sellerRatingInfo = getListingRatingFromMap(
+      listingRatingMap,
+      book._id,
+      sellerId,
+    );
+
     return {
       ...listing,
       effectiveImages,
@@ -295,11 +337,24 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
                 100,
             )
           : 0,
+      rating: sellerRatingInfo.rating,
+      averageRating: sellerRatingInfo.averageRating,
+      ratingCount: sellerRatingInfo.ratingCount,
+      totalRatings: sellerRatingInfo.totalRatings,
+      totalReviews: sellerRatingInfo.totalReviews,
+      reviewCount: sellerRatingInfo.reviewCount,
     };
   });
 
   return {
     ...book,
+    rating: bookOverallReviewStats.averageRating,
+    averageRating: bookOverallReviewStats.averageRating,
+    ratingCount: bookOverallReviewStats.totalReviews,
+    totalRatings: bookOverallReviewStats.totalReviews,
+    totalReviews: bookOverallReviewStats.totalReviews,
+    reviewCount: bookOverallReviewStats.totalReviews,
+    reviewStats: bookOverallReviewStats,
     listings,
   };
 };
@@ -506,4 +561,69 @@ export const updateBookService = async (
 
   return book;
 };
+
+export const lookupBookByIsbnService = async (
+  isbn: string,
+  sellerId?: string,
+) => {
+  const rawIsbn = isbn.trim();
+  const digitsOnly = rawIsbn.replace(/[^0-9X]/gi, "");
+
+  const searchConditions: Record<string, unknown>[] = [
+    { isbn: rawIsbn },
+  ];
+
+  if (digitsOnly.length >= 3) {
+    searchConditions.push({ isbn: digitsOnly });
+    const isbnRegex = new RegExp(
+      `^${digitsOnly.split("").join("[- ]?")}$`,
+      "i",
+    );
+    searchConditions.push({ isbn: { $regex: isbnRegex } });
+  }
+
+  const book = await BookModel.findOne({
+    $or: searchConditions,
+  })
+    .populate("authors", "name nameBn slug photo bio")
+    .populate("publisher", "name nameBn slug logo website")
+    .populate("categories", "name nameBn slug description")
+    .populate("country", "name code phoneCode currency")
+    .populate("createdBy", "name email role")
+    .lean();
+
+  if (!book) {
+    return {
+      exists: false,
+      alreadyListedBySeller: false,
+      existingListingId: null,
+      book: null,
+    };
+  }
+
+  let alreadyListedBySeller = false;
+  let existingListingId: string | null = null;
+
+  if (sellerId && mongoose.Types.ObjectId.isValid(sellerId)) {
+    const existingListing = await BookListingModel.findOne({
+      book: book._id,
+      seller: new mongoose.Types.ObjectId(sellerId),
+    })
+      .select("_id isActive mrpInPaise sellingPriceInPaise stock sku")
+      .lean();
+
+    if (existingListing) {
+      alreadyListedBySeller = true;
+      existingListingId = existingListing._id.toString();
+    }
+  }
+
+  return {
+    exists: true,
+    alreadyListedBySeller,
+    existingListingId,
+    book,
+  };
+};
+
 

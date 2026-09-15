@@ -8,6 +8,11 @@ import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CountryModel } from "../models/country.model.js";
 import { createBookService } from "./book.service.js";
+import {
+  getBatchListingRatingStats,
+  getListingRatingFromMap,
+  calculateReviewStats,
+} from "./review.service.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
@@ -317,7 +322,16 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
     total = count;
   }
 
-  // Format listings with dynamic effectiveImages fallback
+  // Batch compute seller book ratings in a single aggregation query
+  const itemsForRatings = rawListings.map((listing) => ({
+    bookId: (listing.book as { _id?: unknown })?._id || listing.book,
+    sellerId: (listing.seller as { _id?: unknown })?._id || listing.seller,
+    listingId: listing._id,
+  }));
+
+  const ratingMap = await getBatchListingRatingStats(itemsForRatings);
+
+  // Format listings with dynamic effectiveImages fallback and seller book ratings
   const listings = rawListings.map((listing) => {
     const bookObj = listing.book as unknown as BookDocument;
     const customImages = listing.listingImages ?? [];
@@ -331,9 +345,19 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
       }
     }
 
+    const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
+    const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+    const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
+
     return {
       ...listing,
       effectiveImages,
+      rating: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+      ratingCount: ratingInfo.ratingCount,
+      totalRatings: ratingInfo.totalRatings,
+      totalReviews: ratingInfo.totalReviews,
+      reviewCount: ratingInfo.reviewCount,
     };
   });
 
@@ -384,9 +408,39 @@ export const getBookListingByIdService = async (id: string) => {
     }
   }
 
+  const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
+  const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+
+  let reviewStats = {
+    averageRating: 0,
+    totalReviews: 0,
+    ratingBreakdown: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+    ratingPercentages: { 5: 0, 4: 0, 3: 0, 2: 0, 1: 0 },
+  };
+
+  if (
+    bookId &&
+    sellerId &&
+    mongoose.Types.ObjectId.isValid(String(bookId)) &&
+    mongoose.Types.ObjectId.isValid(String(sellerId))
+  ) {
+    reviewStats = await calculateReviewStats(
+      new mongoose.Types.ObjectId(String(bookId)),
+      new mongoose.Types.ObjectId(String(sellerId)),
+    );
+  }
+
   return {
     ...listing,
     effectiveImages,
+    rating: reviewStats.averageRating,
+    averageRating: reviewStats.averageRating,
+    ratingCount: reviewStats.totalReviews,
+    totalRatings: reviewStats.totalReviews,
+    totalReviews: reviewStats.totalReviews,
+    reviewCount: reviewStats.totalReviews,
+    ratingBreakdown: reviewStats.ratingBreakdown,
+    ratingPercentages: reviewStats.ratingPercentages,
   };
 };
 

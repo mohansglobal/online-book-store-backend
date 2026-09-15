@@ -20,26 +20,31 @@ export const getCategoriesService = async (query: CategoryQueryInput) => {
     ];
   }
 
-  const page = query.page;
+  const page = query.page ?? 1;
   const limit = query.limit;
-  const skip = (page - 1) * limit;
+  const isUnlimited = limit === undefined || limit === 0;
+
+  let queryBuilder = CategoryModel.find(filter).sort({
+    [query.sortBy]: query.sortOrder === "asc" ? 1 : -1,
+  });
+
+  if (!isUnlimited) {
+    const skip = (page - 1) * limit;
+    queryBuilder = queryBuilder.skip(skip).limit(limit);
+  }
 
   const [categories, total] = await Promise.all([
-    CategoryModel.find(filter)
-      .sort({ [query.sortBy]: query.sortOrder === "asc" ? 1 : -1 })
-      .skip(skip)
-      .limit(limit)
-      .lean(),
+    queryBuilder.lean(),
     CategoryModel.countDocuments(filter),
   ]);
 
-  const totalPages = Math.ceil(total / limit) || 1;
+  const totalPages = isUnlimited ? 1 : Math.ceil(total / limit) || 1;
 
   return {
     categories,
     meta: {
-      page,
-      limit,
+      page: isUnlimited ? 1 : page,
+      limit: isUnlimited ? total : limit,
       total,
       totalPages,
     },
