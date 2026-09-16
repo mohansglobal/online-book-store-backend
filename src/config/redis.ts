@@ -7,7 +7,7 @@ import { logger } from "../utils/logger.js";
 //Standard Redis connection options for BullMQ queues and workers.
 //Note: `maxRetriesPerRequest: null` is strictly required by BullMQ.
 
-export const redisConnectionOptions: RedisOptions = env.REDIS_URL
+export const redisConnectionOptions: RedisOptions = (env.REDIS_URL
   ? {
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
@@ -18,7 +18,8 @@ export const redisConnectionOptions: RedisOptions = env.REDIS_URL
       password: env.REDIS_PASSWORD || undefined,
       maxRetriesPerRequest: null,
       enableReadyCheck: false,
-    };
+    }) as RedisOptions;
+
 
 
 //Creates a new IORedis instance with standard BullMQ-compatible settings.

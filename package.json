@@ -24,7 +24,8 @@
     "test:profile-image": "tsx src/scripts/test-profile-image-upload.ts",
     "test:phone-otp": "tsx src/scripts/test-phone-verification.ts",
     "test:bullmq": "node --import tsx src/scripts/test-bullmq-queue.ts",
-    "test:smtp": "node --import tsx src/scripts/test-smtp-delivery.ts"
+    "test:smtp": "node --import tsx src/scripts/test-smtp-delivery.ts",
+    "test:seller-stock": "tsx src/scripts/test-seller-listings-and-stock.ts"
   },
   "keywords": [],
   "author": "",

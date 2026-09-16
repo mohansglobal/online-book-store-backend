@@ -10,6 +10,7 @@ import {
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
+import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
 import type {
   AddToWishlistInput,
   SyncWishlistInput,
@@ -85,8 +86,11 @@ export const getWishlistService = async (userId: string) => {
       const mrpInRupees = Math.round(mrpInPaise / 100);
 
       const customImages = bestListing?.listingImages ?? [];
-      const fallbackImage =
-        customImages[0] ?? book.coverImage ?? book.images?.[0] ?? "";
+      const resolvedImages = getMergedAndShuffledBookImages(
+        book.coverImage,
+        book.images,
+        customImages,
+      );
 
       const ratingInfo = bestListing
         ? getListingRatingFromMap(ratingMap, book._id, bestListing.seller)
@@ -108,11 +112,12 @@ export const getWishlistService = async (userId: string) => {
         slug: book._id,
         canonicalSlug: book.slug,
         isbn: book.isbn,
-        coverImage: fallbackImage,
-        images: book.images || [],
+        coverImage: resolvedImages.coverImage,
+        images: resolvedImages.images,
         format: book.format || "Paperback",
         authors: book.authors || [],
         publisher: book.publisher,
+
         categories: book.categories || [],
         priceInPaise,
         priceInRupees,

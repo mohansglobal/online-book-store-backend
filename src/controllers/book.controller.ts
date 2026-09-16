@@ -7,11 +7,13 @@ import {
   lookupBookByIsbnService,
   createBookService,
   updateBookService,
+  toggleBookStatusService,
 } from "../services/book.service.js";
 import type {
   BookQueryInput,
   CreateBookInput,
   UpdateBookInput,
+  ToggleBookStatusInput,
 } from "../validation/book.schema.js";
 
 export const getBooks = asyncHandler(async (req, res) => {
@@ -65,4 +67,25 @@ export const updateBook = asyncHandler(async (req, res) => {
 
   apiResponse(res, HTTP_STATUS.OK, "Book updated successfully", book);
 });
+
+export const toggleBookStatus = asyncHandler(async (req, res) => {
+  const bookId = req.params.id as string;
+  const userContext = req.user!;
+  const body = req.body as ToggleBookStatusInput;
+
+  const targetStatus = body?.status !== undefined ? body.status : body?.isActive;
+  const book = await toggleBookStatusService(
+    bookId,
+    userContext,
+    targetStatus,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    `Book ${book.status === "ACTIVE" ? "activated" : "deactivated"} successfully`,
+    book,
+  );
+});
+
 

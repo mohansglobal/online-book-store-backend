@@ -12,6 +12,7 @@ import {
   bookIsbnParamSchema,
   createBookSchema,
   updateBookSchema,
+  toggleBookStatusSchema,
 } from "../validation/book.schema.js";
 import {
   getBooks,
@@ -19,6 +20,7 @@ import {
   lookupBookByIsbn,
   createBook,
   updateBook,
+  toggleBookStatus,
 } from "../controllers/book.controller.js";
 
 const router = Router();
@@ -45,5 +47,20 @@ router.patch(
   validate(updateBookSchema, "body"),
   updateBook,
 );
+router.patch(
+  "/:id/status",
+  authenticate,
+  authorize("SELLER", "ADMIN"),
+  validate(toggleBookStatusSchema, "body"),
+  toggleBookStatus,
+);
+router.patch(
+  "/:id/toggle-status",
+  authenticate,
+  authorize("SELLER", "ADMIN"),
+  validate(toggleBookStatusSchema, "body"),
+  toggleBookStatus,
+);
 
 export default router;
+

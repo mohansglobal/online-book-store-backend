@@ -244,3 +244,11 @@ export type CreateBookInput = z.input<typeof createBookSchema>;
 export const updateBookSchema = createBookSchema.partial();
 
 export type UpdateBookInput = z.input<typeof updateBookSchema>;
+
+export const toggleBookStatusSchema = z.object({
+  status: z.enum(BOOK_STATUSES).optional(),
+  isActive: z.boolean().optional(),
+});
+
+export type ToggleBookStatusInput = z.infer<typeof toggleBookStatusSchema>;
+

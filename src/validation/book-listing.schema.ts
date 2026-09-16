@@ -320,7 +320,12 @@ export const createBookListingSchema = z
       sellingPriceInPaise: sellingPriceInPaise ?? 0,
       stock: data.stock,
       sku: data.sku,
-      listingImages: data.listingImages,
+      listingImages:
+        data.listingImages && data.listingImages.length > 0
+          ? data.listingImages
+          : data.images && data.images.length > 0
+            ? data.images
+            : [],
       isActive: data.isActive,
     };
   })
@@ -354,8 +359,26 @@ export const updateBookListingSchema = z
       .nonnegative("Stock cannot be negative")
       .optional(),
     sku: z.string().trim().optional(),
+    images: z.array(z.string().trim()).optional(),
     listingImages: z.array(z.string().trim()).optional(),
     isActive: z.boolean().optional(),
+  })
+  .transform((data) => {
+    const resolvedListingImages =
+      data.listingImages !== undefined
+        ? data.listingImages
+        : data.images !== undefined
+          ? data.images
+          : undefined;
+
+    return {
+      mrpInPaise: data.mrpInPaise,
+      sellingPriceInPaise: data.sellingPriceInPaise,
+      stock: data.stock,
+      sku: data.sku,
+      listingImages: resolvedListingImages,
+      isActive: data.isActive,
+    };
   })
   .refine(
     (data) => {
@@ -375,4 +398,140 @@ export const updateBookListingSchema = z
 
 export type UpdateBookListingInput = z.input<typeof updateBookListingSchema>;
 export type UpdateBookListingOutput = z.output<typeof updateBookListingSchema>;
+
+export const myBookListingQuerySchema = z
+  .object({
+    page: z.coerce.number().int().positive().default(1),
+    limit: z.coerce.number().int().positive().max(100).default(20),
+    search: z.string().trim().optional(),
+    isActive: z
+      .union([z.boolean(), z.enum(["true", "false"])])
+      .transform((val) => (typeof val === "boolean" ? val : val === "true"))
+      .optional(),
+    inStock: z
+      .union([z.boolean(), z.enum(["true", "false"])])
+      .transform((val) => (typeof val === "boolean" ? val : val === "true"))
+      .optional(),
+    sortBy: z
+      .enum([
+        "createdAt",
+        "sellingPriceInPaise",
+        "stock",
+        "mrpInPaise",
+        "title",
+        "recent",
+        "newest",
+        "oldest",
+        "price_asc",
+        "price_desc",
+        "price-asc",
+        "price-desc",
+        "stock_asc",
+        "stock_desc",
+        "title_asc",
+        "title_desc",
+      ])
+      .default("createdAt"),
+    sortOrder: z
+      .enum(["asc", "desc", "lowToHigh", "highToLow", "1", "-1"])
+      .default("desc"),
+  })
+  .transform((data) => {
+    let sortBy:
+      | "createdAt"
+      | "sellingPriceInPaise"
+      | "stock"
+      | "mrpInPaise"
+      | "title" = "createdAt";
+    let sortOrder: "asc" | "desc" =
+      data.sortOrder === "lowToHigh" || data.sortOrder === "1"
+        ? "asc"
+        : data.sortOrder === "highToLow" || data.sortOrder === "-1"
+          ? "desc"
+          : data.sortOrder;
+
+    const rawSortBy = data.sortBy;
+    if (rawSortBy === "price_asc" || rawSortBy === "price-asc") {
+      sortBy = "sellingPriceInPaise";
+      sortOrder = "asc";
+    } else if (rawSortBy === "price_desc" || rawSortBy === "price-desc") {
+      sortBy = "sellingPriceInPaise";
+      sortOrder = "desc";
+    } else if (rawSortBy === "newest" || rawSortBy === "recent") {
+      sortBy = "createdAt";
+      sortOrder = "desc";
+    } else if (rawSortBy === "oldest") {
+      sortBy = "createdAt";
+      sortOrder = "asc";
+    } else if (rawSortBy === "stock_asc") {
+      sortBy = "stock";
+      sortOrder = "asc";
+    } else if (rawSortBy === "stock_desc") {
+      sortBy = "stock";
+      sortOrder = "desc";
+    } else if (rawSortBy === "title_asc") {
+      sortBy = "title";
+      sortOrder = "asc";
+    } else if (rawSortBy === "title_desc") {
+      sortBy = "title";
+      sortOrder = "desc";
+    } else {
+      sortBy = rawSortBy as
+        | "createdAt"
+        | "sellingPriceInPaise"
+        | "stock"
+        | "mrpInPaise"
+        | "title";
+    }
+
+    return {
+      page: data.page,
+      limit: data.limit,
+      search: data.search,
+      isActive: data.isActive,
+      inStock: data.inStock,
+      sortBy,
+      sortOrder,
+    };
+  });
+
+export type MyBookListingQueryInput = z.infer<typeof myBookListingQuerySchema>;
+
+export const updateStockSchema = z
+  .object({
+    operation: z.enum(["increase", "decrease", "set"], {
+      message: "Operation must be 'increase', 'decrease', or 'set'",
+    }),
+    quantity: z.coerce
+      .number()
+      .int("Quantity must be an integer")
+      .nonnegative("Quantity cannot be negative"),
+  })
+  .refine(
+    (data) => {
+      if (
+        (data.operation === "increase" || data.operation === "decrease") &&
+        data.quantity <= 0
+      ) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message:
+        "Quantity must be greater than 0 for increase or decrease operations",
+      path: ["quantity"],
+    },
+  );
+
+export type UpdateStockInput = z.infer<typeof updateStockSchema>;
+
+export const toggleBookListingStatusSchema = z.object({
+  isActive: z.boolean().optional(),
+});
+
+export type ToggleBookListingStatusInput = z.infer<typeof toggleBookListingStatusSchema>;
+
+
+
 

@@ -26,6 +26,6 @@ export const defaultJobOptions: JobsOptions = {
  * Standard base QueueOptions configuration.
  */
 export const defaultQueueOptions: QueueOptions = {
-  connection: redisConnectionOptions,
+  connection: redisConnectionOptions as any,
   defaultJobOptions,
 };

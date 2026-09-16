@@ -62,3 +62,6 @@ export const uploadReviewImagesMiddleware = upload.fields([
   { name: "files", maxCount: 5 },
   { name: "image", maxCount: 5 },
 ]);
+
+export const uploadFlexibleImagesMiddleware = upload.any();
+

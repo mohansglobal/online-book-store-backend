@@ -7,11 +7,17 @@ import {
   createBookListingService,
   updateBookListingService,
   deleteBookListingService,
+  getMyBookListingsService,
+  updateListingStockService,
+  toggleBookListingStatusService,
 } from "../services/book-listing.service.js";
 import type {
   BookListingQueryInput,
   CreateBookListingInput,
   UpdateBookListingInput,
+  MyBookListingQueryInput,
+  UpdateStockInput,
+  ToggleBookListingStatusInput,
 } from "../validation/book-listing.schema.js";
 
 export const getBookListings = asyncHandler(async (req, res) => {
@@ -23,6 +29,22 @@ export const getBookListings = asyncHandler(async (req, res) => {
     res,
     HTTP_STATUS.OK,
     "Book listings retrieved successfully",
+    listings,
+    meta,
+  );
+});
+
+export const getMyBookListings = asyncHandler(async (req, res) => {
+  const sellerId = req.user!.id;
+  const { listings, meta } = await getMyBookListingsService(
+    sellerId,
+    req.query as unknown as MyBookListingQueryInput,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Seller book listings retrieved successfully",
     listings,
     meta,
   );
@@ -68,8 +90,48 @@ export const updateBookListing = asyncHandler(async (req, res) => {
   );
 });
 
+export const updateListingStock = asyncHandler(async (req, res) => {
+  const listingId = req.params.id as string;
+  const userContext = req.user!;
+  const input = req.body as UpdateStockInput;
+
+  const listing = await updateListingStockService(
+    listingId,
+    userContext,
+    input,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Book listing stock updated successfully",
+    listing,
+  );
+});
+
 export const deleteBookListing = asyncHandler(async (req, res) => {
   await deleteBookListingService(req.params.id as string, req.user!);
 
   apiResponse(res, HTTP_STATUS.OK, "Book listing deleted successfully");
 });
+
+export const toggleBookListingStatus = asyncHandler(async (req, res) => {
+  const listingId = req.params.id as string;
+  const userContext = req.user!;
+  const body = req.body as ToggleBookListingStatusInput;
+
+  const listing = await toggleBookListingStatusService(
+    listingId,
+    userContext,
+    body?.isActive,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    `Book listing ${listing.isActive ? "activated" : "deactivated"} successfully`,
+    listing,
+  );
+});
+
+

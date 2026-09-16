@@ -124,7 +124,7 @@ export const processEmailJob = async (job: Job) => {
  */
 export const createEmailWorker = (): Worker => {
   const worker = new Worker(QUEUE_NAMES.EMAIL, processEmailJob, {
-    connection: redisConnectionOptions,
+    connection: redisConnectionOptions as any,
     concurrency: 5,
   });
 

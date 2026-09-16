@@ -11,6 +11,7 @@ import type {
   SyncCartInput,
   UpdateCartItemInput,
 } from "../validation/cart.schema.js";
+import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
 
 export const getCartService = async (userId: string) => {
   let cart: any = await CartModel.findOne({ user: userId })
@@ -73,8 +74,11 @@ export const getCartService = async (userId: string) => {
     }
 
     const customImages = listing.listingImages ?? [];
-    const fallbackImage =
-      customImages[0] ?? listing.book?.coverImage ?? listing.book?.images?.[0] ?? "";
+    const resolvedImages = getMergedAndShuffledBookImages(
+      listing.book?.coverImage,
+      listing.book?.images,
+      customImages,
+    );
 
     const priceInRupees = Math.round(priceInPaise / 100);
     const mrpInPaise = listing.mrpInPaise ?? priceInPaise;
@@ -98,8 +102,8 @@ export const getCartService = async (userId: string) => {
         titleBn: listing.book?.titleBn,
         slug: listing.book?.slug,
         isbn: listing.book?.isbn,
-        coverImage: fallbackImage,
-        images: listing.book?.images ?? [],
+        coverImage: resolvedImages.coverImage,
+        images: resolvedImages.images,
         publisher: listing.book?.publisher,
         authors: listing.book?.authors,
       },

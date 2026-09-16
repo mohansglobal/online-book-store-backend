@@ -1,6 +1,11 @@
 import mongoose from "mongoose";
 
-import { BookModel, type BookDocument } from "../models/book.model.js";
+import {
+  BookModel,
+  BOOK_STATUSES,
+  type BookDocument,
+  type BookStatus,
+} from "../models/book.model.js";
 import { BookListingModel, type BookListingDocument } from "../models/book-listing.model.js";
 import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
@@ -21,6 +26,7 @@ import {
   type CreateBookInput,
   type UpdateBookInput,
 } from "../validation/book.schema.js";
+import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
 
 const slugify = (text: string): string => {
   return text
@@ -56,12 +62,13 @@ export const getBooksService = async (query: BookQueryInput) => {
     listingFilter.sellingPriceInPaise = priceFilter;
   }
 
-  // Build canonical book filter for metadata search/filtering
-  const bookFilter: Record<string, unknown> = {};
-  let filterBooksNeeded = false;
+  // Build canonical book filter for metadata search/filtering (only active books by default)
+  const bookFilter: Record<string, unknown> = {
+    status: query.status || "ACTIVE",
+  };
+  let filterBooksNeeded = true;
 
   if (query.category && query.category.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.category.filter((id) => objectIdRegex.test(id));
     const matchedCategories = await CategoryModel.find({
       $or: [
@@ -78,7 +85,6 @@ export const getBooksService = async (query: BookQueryInput) => {
   }
 
   if (query.author && query.author.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.author.filter((id) => objectIdRegex.test(id));
     const matchedAuthors = await AuthorModel.find({
       $or: [
@@ -95,7 +101,6 @@ export const getBooksService = async (query: BookQueryInput) => {
   }
 
   if (query.publisher && query.publisher.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.publisher.filter((id) => objectIdRegex.test(id));
     const matchedPublishers = await PublisherModel.find({
       $or: [
@@ -112,17 +117,10 @@ export const getBooksService = async (query: BookQueryInput) => {
   }
 
   if (query.language) {
-    filterBooksNeeded = true;
     bookFilter.language = query.language;
   }
 
-  if (query.status) {
-    filterBooksNeeded = true;
-    bookFilter.status = query.status;
-  }
-
   if (query.search) {
-    filterBooksNeeded = true;
     const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const searchRegex = new RegExp(escapedSearch, "i");
     bookFilter.$or = [
@@ -197,15 +195,11 @@ export const getBooksService = async (query: BookQueryInput) => {
       country?: unknown;
     }) | null;
     const customImages = listing.listingImages ?? [];
-    let effectiveImages: string[] = customImages;
-
-    if (effectiveImages.length === 0 && bookObj) {
-      if (bookObj.images && bookObj.images.length > 0) {
-        effectiveImages = bookObj.images;
-      } else if (bookObj.coverImage) {
-        effectiveImages = [bookObj.coverImage];
-      }
-    }
+    const resolvedImages = getMergedAndShuffledBookImages(
+      bookObj?.coverImage,
+      bookObj?.images,
+      customImages,
+    );
 
     const bookId = bookObj?._id || listing.book;
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
@@ -228,8 +222,9 @@ export const getBooksService = async (query: BookQueryInput) => {
       format: bookObj?.format,
       pages: bookObj?.pages,
       edition: bookObj?.edition,
-      coverImage: effectiveImages[0] ?? bookObj?.coverImage,
-      images: effectiveImages,
+      coverImage: resolvedImages.coverImage,
+      images: resolvedImages.images,
+      effectiveImages: resolvedImages.effectiveImages,
       listingImages: customImages,
       price: Math.round(listing.sellingPriceInPaise / 100),
       priceInPaise: listing.sellingPriceInPaise,
@@ -307,17 +302,18 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
     ),
   ]);
 
+  const mainBookImages = getMergedAndShuffledBookImages(
+    book.coverImage,
+    book.images,
+  );
+
   const listings = rawListings.map((listing) => {
     const customImages = listing.listingImages ?? [];
-    let effectiveImages: string[] = customImages;
-
-    if (effectiveImages.length === 0) {
-      if (book.images && book.images.length > 0) {
-        effectiveImages = book.images;
-      } else if (book.coverImage) {
-        effectiveImages = [book.coverImage];
-      }
-    }
+    const resolvedListingImages = getMergedAndShuffledBookImages(
+      book.coverImage,
+      book.images,
+      customImages,
+    );
 
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const sellerRatingInfo = getListingRatingFromMap(
@@ -328,7 +324,9 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
 
     return {
       ...listing,
-      effectiveImages,
+      coverImage: resolvedListingImages.coverImage,
+      images: resolvedListingImages.images,
+      effectiveImages: resolvedListingImages.effectiveImages,
       discountPercentage:
         listing.mrpInPaise > 0
           ? Math.round(
@@ -348,6 +346,9 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
 
   return {
     ...book,
+    coverImage: mainBookImages.coverImage,
+    images: mainBookImages.images,
+    effectiveImages: mainBookImages.effectiveImages,
     rating: bookOverallReviewStats.averageRating,
     averageRating: bookOverallReviewStats.averageRating,
     ratingCount: bookOverallReviewStats.totalReviews,
@@ -625,5 +626,57 @@ export const lookupBookByIsbnService = async (
     book,
   };
 };
+
+export const toggleBookStatusService = async (
+  bookId: string,
+  userContext: { id: string; role: string },
+  inputStatus?: string | boolean,
+) => {
+  if (!mongoose.Types.ObjectId.isValid(bookId)) {
+    throw new AppError("Invalid book ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const book = await BookModel.findById(bookId);
+  if (!book) {
+    throw new AppError("Book not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  const isCreator = book.createdBy.toString() === userContext.id;
+  const isAdmin = userContext.role === "ADMIN";
+
+  if (!isCreator && !isAdmin) {
+    throw new AppError(
+      "Forbidden: You do not have permission to modify this book",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  let nextStatus: BookStatus;
+  if (typeof inputStatus === "boolean") {
+    nextStatus = inputStatus ? "ACTIVE" : "INACTIVE";
+  } else if (
+    typeof inputStatus === "string" &&
+    BOOK_STATUSES.includes(inputStatus as BookStatus)
+  ) {
+    nextStatus = inputStatus as BookStatus;
+  } else {
+    nextStatus = book.status === "ACTIVE" ? "INACTIVE" : "ACTIVE";
+  }
+
+  book.status = nextStatus;
+  await book.save();
+
+  logger.info(
+    {
+      bookId: book._id,
+      status: book.status,
+      userId: userContext.id,
+    },
+    "Book status toggled successfully",
+  );
+
+  return book;
+};
+
 
 

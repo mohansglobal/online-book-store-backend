@@ -395,16 +395,16 @@ export const createOrderService = async (
 
   // Create Order items
   const orderItems = acquiredItems.map((item) => {
-    const customImages = item.listing.listingImages ?? [];
-    const coverImage =
-      customImages[0] ?? item.book.coverImage ?? item.book.images?.[0] ?? "";
+    const bookCover = item.book.coverImage?.trim();
+    const bookGalleryFirst = item.book.images?.[0]?.trim();
+    const bookCoverImage = bookCover || bookGalleryFirst || "";
 
     return {
       bookListing: item.listing._id,
       book: item.book._id,
       seller: item.listing.seller,
       title: item.book.title,
-      coverImage,
+      coverImage: bookCoverImage,
       priceInPaise: item.priceInPaise,
       quantity: item.quantity,
       subtotalInPaise: item.subtotalInPaise,
@@ -500,6 +500,32 @@ export const createOrderService = async (
   return newOrder;
 };
 
+const resolveItemCoverImage = (item: {
+  coverImage?: string;
+  book?: unknown;
+}): string => {
+  const book = item.book as
+    | { coverImage?: string; images?: string[] }
+    | undefined;
+
+  const bookCoverImage = book?.coverImage?.trim();
+  if (bookCoverImage) {
+    return bookCoverImage;
+  }
+
+  const bookFirstGalleryImage = book?.images?.[0]?.trim();
+  if (bookFirstGalleryImage) {
+    return bookFirstGalleryImage;
+  }
+
+  const existingItemCoverImage = item.coverImage?.trim();
+  if (existingItemCoverImage) {
+    return existingItemCoverImage;
+  }
+
+  return "";
+};
+
 const buildDateFilter = (query: OrderQueryInput) => {
   const dateFilter: Record<string, Date> = {};
   const now = new Date();
@@ -573,12 +599,30 @@ export const getMyOrdersService = async (
       .skip(skip)
       .limit(limit)
       .populate("items.seller", "name email")
+      .populate("items.book", "title titleBn coverImage images slug format")
+      .populate("items.bookListing", "format condition edition mrpInPaise sellingPriceInPaise")
       .lean(),
     OrderModel.countDocuments(filter),
   ]);
 
+  const formattedOrders = orders.map((order) => {
+    const formattedItems = (order.items || []).map((item) => {
+      const coverImage = resolveItemCoverImage(item);
+      return {
+        ...item,
+        coverImage,
+        image: coverImage,
+      };
+    });
+
+    return {
+      ...order,
+      items: formattedItems,
+    };
+  });
+
   return {
-    orders,
+    orders: formattedOrders,
     meta: {
       page,
       limit,
@@ -612,19 +656,37 @@ export const getSellerOrdersService = async (
       .skip(skip)
       .limit(limit)
       .populate("buyer", "name email mobileNumber")
+      .populate("items.seller", "name email")
+      .populate("items.book", "title titleBn coverImage images slug format")
+      .populate("items.bookListing", "format condition edition mrpInPaise sellingPriceInPaise")
       .lean(),
     OrderModel.countDocuments(filter),
   ]);
 
   // Filter items in order to only show items belonging to this seller
   const sellerFilteredOrders = orders.map((order) => {
-    const sellerItems = (order.items || []).filter(
-      (item) => item.seller?.toString() === sellerId,
-    );
+    const sellerItems = (order.items || [])
+      .filter((item) => {
+        const itemSellerId =
+          item.seller && typeof item.seller === "object" && "_id" in item.seller
+            ? (item.seller as { _id: unknown })._id?.toString()
+            : item.seller?.toString();
+        return itemSellerId === sellerId;
+      })
+      .map((item) => {
+        const coverImage = resolveItemCoverImage(item);
+        return {
+          ...item,
+          coverImage,
+          image: coverImage,
+        };
+      });
+
     const sellerSubtotal = sellerItems.reduce(
       (acc, item) => acc + item.subtotalInPaise,
       0,
     );
+
     return {
       ...order,
       items: sellerItems,
@@ -650,6 +712,8 @@ export const getOrderByIdService = async (
   const order = await OrderModel.findById(orderId)
     .populate("buyer", "name email mobileNumber")
     .populate("items.seller", "name email")
+    .populate("items.book", "title titleBn coverImage images slug format")
+    .populate("items.bookListing", "format condition edition mrpInPaise sellingPriceInPaise")
     .lean();
 
   if (!order) {
@@ -657,16 +721,32 @@ export const getOrderByIdService = async (
   }
 
   const isBuyer = order.buyer?._id?.toString() === userContext.id;
-  const isSeller = order.items.some(
-    (item) => item.seller?._id?.toString() === userContext.id,
-  );
+  const isSeller = order.items.some((item) => {
+    const itemSellerId =
+      item.seller && typeof item.seller === "object" && "_id" in item.seller
+        ? (item.seller as { _id: unknown })._id?.toString()
+        : item.seller?.toString();
+    return itemSellerId === userContext.id;
+  });
   const isAdmin = userContext.role === "ADMIN";
 
   if (!isBuyer && !isSeller && !isAdmin) {
     throw new AppError("Forbidden: You do not have access to this order", HTTP_STATUS.FORBIDDEN);
   }
 
-  return order;
+  const formattedItems = (order.items || []).map((item) => {
+    const coverImage = resolveItemCoverImage(item);
+    return {
+      ...item,
+      coverImage,
+      image: coverImage,
+    };
+  });
+
+  return {
+    ...order,
+    items: formattedItems,
+  };
 };
 
 export const cancelOrderService = async (

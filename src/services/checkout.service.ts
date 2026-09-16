@@ -154,12 +154,10 @@ export const getCheckoutSummaryService = async (
         : "Various Authors";
 
     // Format cover image
-    const customImages = listing?.listingImages ?? [];
-    const coverImage =
-      customImages[0] ??
-      listing?.book?.coverImage ??
-      listing?.book?.images?.[0] ??
-      "";
+    const bookCover = listing?.book?.coverImage?.trim();
+    const bookGalleryFirst = listing?.book?.images?.[0]?.trim();
+    const listingCustomFirst = listing?.listingImages?.[0]?.trim();
+    const coverImage = bookCover || bookGalleryFirst || listingCustomFirst || "";
 
     items.push({
       bookListingId: listingIdStr,

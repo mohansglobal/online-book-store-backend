@@ -19,10 +19,15 @@ import { logger } from "../utils/logger.js";
 import {
   createBookListingSchema,
   updateBookListingSchema,
+  myBookListingQuerySchema,
+  updateStockSchema,
   type BookListingQueryInput,
   type CreateBookListingInput,
   type UpdateBookListingInput,
+  type MyBookListingQueryInput,
+  type UpdateStockInput,
 } from "../validation/book-listing.schema.js";
+import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
@@ -59,13 +64,13 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
     filter.sellingPriceInPaise = priceFilter;
   }
 
-  // If query contains category, author, publisher, country, or search keyword,
-  // find matching canonical books first
-  const bookFilter: Record<string, unknown> = {};
-  let filterBooksNeeded = false;
+  // Build canonical book filter for metadata search/filtering (only active books by default)
+  const bookFilter: Record<string, unknown> = {
+    status: "ACTIVE",
+  };
+  let filterBooksNeeded = true;
 
   if (query.category && query.category.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.category.filter((id) => objectIdRegex.test(id));
     const matchedCategories = await CategoryModel.find({
       $or: [
@@ -82,7 +87,6 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   }
 
   if (query.author && query.author.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.author.filter((id) => objectIdRegex.test(id));
     const matchedAuthors = await AuthorModel.find({
       $or: [
@@ -99,7 +103,6 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   }
 
   if (query.publisher && query.publisher.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.publisher.filter((id) => objectIdRegex.test(id));
     const matchedPublishers = await PublisherModel.find({
       $or: [
@@ -116,7 +119,6 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   }
 
   if (query.country && query.country.length > 0) {
-    filterBooksNeeded = true;
     const validIds = query.country.filter((id) => objectIdRegex.test(id));
     const matchedCountries = await CountryModel.find({
       $or: [
@@ -133,12 +135,10 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   }
 
   if (query.language) {
-    filterBooksNeeded = true;
     bookFilter.language = query.language;
   }
 
   if (query.search) {
-    filterBooksNeeded = true;
     const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const searchRegex = new RegExp(escapedSearch, "i");
     bookFilter.$or = [
@@ -335,15 +335,11 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   const listings = rawListings.map((listing) => {
     const bookObj = listing.book as unknown as BookDocument;
     const customImages = listing.listingImages ?? [];
-    let effectiveImages: string[] = customImages;
-
-    if (effectiveImages.length === 0 && bookObj) {
-      if (bookObj.images && bookObj.images.length > 0) {
-        effectiveImages = bookObj.images;
-      } else if (bookObj.coverImage) {
-        effectiveImages = [bookObj.coverImage];
-      }
-    }
+    const resolvedImages = getMergedAndShuffledBookImages(
+      bookObj?.coverImage,
+      bookObj?.images,
+      customImages,
+    );
 
     const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
@@ -351,7 +347,9 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
 
     return {
       ...listing,
-      effectiveImages,
+      coverImage: resolvedImages.coverImage,
+      images: resolvedImages.images,
+      effectiveImages: resolvedImages.effectiveImages,
       rating: ratingInfo.rating,
       averageRating: ratingInfo.averageRating,
       ratingCount: ratingInfo.ratingCount,
@@ -398,15 +396,11 @@ export const getBookListingByIdService = async (id: string) => {
 
   const bookObj = listing.book as unknown as BookDocument;
   const customImages = listing.listingImages ?? [];
-  let effectiveImages: string[] = customImages;
-
-  if (effectiveImages.length === 0 && bookObj) {
-    if (bookObj.images && bookObj.images.length > 0) {
-      effectiveImages = bookObj.images;
-    } else if (bookObj.coverImage) {
-      effectiveImages = [bookObj.coverImage];
-    }
-  }
+  const resolvedImages = getMergedAndShuffledBookImages(
+    bookObj?.coverImage,
+    bookObj?.images,
+    customImages,
+  );
 
   const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
   const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
@@ -432,7 +426,9 @@ export const getBookListingByIdService = async (id: string) => {
 
   return {
     ...listing,
-    effectiveImages,
+    coverImage: resolvedImages.coverImage,
+    images: resolvedImages.images,
+    effectiveImages: resolvedImages.effectiveImages,
     rating: reviewStats.averageRating,
     averageRating: reviewStats.averageRating,
     ratingCount: reviewStats.totalReviews,
@@ -642,4 +638,366 @@ export const deleteBookListingService = async (
 
   logger.info({ listingId: id }, "Book listing deleted successfully");
 };
+
+export const getMyBookListingsService = async (
+  sellerId: string,
+  rawQuery: MyBookListingQueryInput,
+) => {
+  const query = myBookListingQuerySchema.parse(rawQuery);
+
+  if (!mongoose.Types.ObjectId.isValid(sellerId)) {
+    throw new AppError("Invalid seller ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const sellerObjectId = new mongoose.Types.ObjectId(sellerId);
+  const filter: Record<string, unknown> = {
+    seller: sellerObjectId,
+  };
+
+  if (query.isActive !== undefined) {
+    filter.isActive = query.isActive;
+  }
+
+  if (query.inStock !== undefined) {
+    if (query.inStock) {
+      filter.stock = { $gt: 0 };
+    } else {
+      filter.stock = 0;
+    }
+  }
+
+  if (query.search) {
+    const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    const searchRegex = new RegExp(escapedSearch, "i");
+
+    const matchingBookIds = await BookModel.find({
+      $or: [
+        { title: searchRegex },
+        { titleBn: searchRegex },
+        { isbn: searchRegex },
+        { searchTags: searchRegex },
+        { description: searchRegex },
+      ],
+    }).distinct("_id");
+
+    filter.$or = [
+      { book: { $in: matchingBookIds } },
+      { sku: searchRegex },
+    ];
+  }
+
+  const page = query.page;
+  const limit = query.limit;
+  const skip = (page - 1) * limit;
+  const sortDir: 1 | -1 = query.sortOrder === "asc" ? 1 : -1;
+
+  const isTitleSort = query.sortBy === "title";
+  let rawListings: any[];
+  let total = 0;
+
+  if (isTitleSort) {
+    const aggregatePipeline: any[] = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$bookDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      { $sort: { "bookDoc.title": sortDir, _id: 1 } },
+      { $skip: skip },
+      { $limit: limit },
+      { $project: { bookDoc: 0 } },
+    ];
+
+    const [aggregatedListings, count] = await Promise.all([
+      BookListingModel.aggregate(aggregatePipeline),
+      BookListingModel.countDocuments(filter),
+    ]);
+
+    rawListings = await BookListingModel.populate(aggregatedListings, [
+      {
+        path: "book",
+        populate: [
+          { path: "authors", select: "name nameBn slug photo" },
+          { path: "publisher", select: "name nameBn slug logo" },
+          { path: "categories", select: "name nameBn slug" },
+          { path: "country", select: "name code phoneCode" },
+        ],
+      },
+      {
+        path: "seller",
+        select: "name email mobileNumber role profilePicture",
+      },
+    ]);
+
+    total = count;
+  } else {
+    const [findResults, count] = await Promise.all([
+      BookListingModel.find(filter)
+        .populate({
+          path: "book",
+          populate: [
+            { path: "authors", select: "name nameBn slug photo" },
+            { path: "publisher", select: "name nameBn slug logo" },
+            { path: "categories", select: "name nameBn slug" },
+            { path: "country", select: "name code phoneCode" },
+          ],
+        })
+        .populate("seller", "name email mobileNumber role profilePicture")
+        .sort({ [query.sortBy]: sortDir, _id: 1 })
+        .skip(skip)
+        .limit(limit)
+        .lean(),
+      BookListingModel.countDocuments(filter),
+    ]);
+
+    rawListings = findResults;
+    total = count;
+  }
+
+  const itemsForRatings = rawListings.map((listing) => ({
+    bookId: (listing.book as { _id?: unknown })?._id || listing.book,
+    sellerId: (listing.seller as { _id?: unknown })?._id || listing.seller,
+    listingId: listing._id,
+  }));
+
+  const ratingMap = await getBatchListingRatingStats(itemsForRatings);
+
+  const listings = rawListings.map((listing) => {
+    const bookObj = listing.book as unknown as BookDocument;
+    const customImages = listing.listingImages ?? [];
+    const resolvedImages = getMergedAndShuffledBookImages(
+      bookObj?.coverImage,
+      bookObj?.images,
+      customImages,
+    );
+
+    const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
+    const itemSellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+    const ratingInfo = getListingRatingFromMap(ratingMap, bookId, itemSellerId);
+
+    return {
+      ...listing,
+      coverImage: resolvedImages.coverImage,
+      images: resolvedImages.images,
+      effectiveImages: resolvedImages.effectiveImages,
+      rating: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+      ratingCount: ratingInfo.ratingCount,
+      totalRatings: ratingInfo.totalRatings,
+      totalReviews: ratingInfo.totalReviews,
+      reviewCount: ratingInfo.reviewCount,
+    };
+  });
+
+  const totalPages = Math.ceil(total / limit) || 1;
+
+  return {
+    listings,
+    meta: {
+      page,
+      limit,
+      total,
+      totalPages,
+    },
+  };
+};
+
+export const updateListingStockService = async (
+  listingId: string,
+  userContext: { id: string; role: string },
+  rawInput: UpdateStockInput,
+) => {
+  if (!mongoose.Types.ObjectId.isValid(listingId)) {
+    throw new AppError("Invalid listing ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const input = updateStockSchema.parse(rawInput);
+  const operation = input.operation;
+  const quantity = input.quantity;
+
+  const listing = await BookListingModel.findById(listingId);
+  if (!listing) {
+    throw new AppError("Book listing not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  // Verify ownership
+  const isOwner = listing.seller.toString() === userContext.id;
+  const isAdmin = userContext.role === "ADMIN";
+
+  if (!isOwner && !isAdmin) {
+    throw new AppError(
+      "Forbidden: You do not own this book listing",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  let updatedListing: any = null;
+
+  if (operation === "increase") {
+    updatedListing = await BookListingModel.findOneAndUpdate(
+      {
+        _id: listingId,
+      },
+      {
+        $inc: { stock: quantity },
+      },
+      {
+        returnDocument: "after",
+      },
+    )
+      .populate({
+        path: "book",
+        populate: [
+          { path: "authors", select: "name nameBn slug photo" },
+          { path: "publisher", select: "name nameBn slug logo" },
+          { path: "categories", select: "name nameBn slug" },
+          { path: "country", select: "name code phoneCode" },
+        ],
+      })
+      .populate("seller", "name email mobileNumber role profilePicture")
+      .lean();
+  } else if (operation === "decrease") {
+    // Atomic decrease preventing negative stock
+    updatedListing = await BookListingModel.findOneAndUpdate(
+      {
+        _id: listingId,
+        stock: { $gte: quantity },
+      },
+      {
+        $inc: { stock: -quantity },
+      },
+      {
+        returnDocument: "after",
+      },
+    )
+      .populate({
+        path: "book",
+        populate: [
+          { path: "authors", select: "name nameBn slug photo" },
+          { path: "publisher", select: "name nameBn slug logo" },
+          { path: "categories", select: "name nameBn slug" },
+          { path: "country", select: "name code phoneCode" },
+        ],
+      })
+      .populate("seller", "name email mobileNumber role profilePicture")
+      .lean();
+
+    if (!updatedListing) {
+      const currentListing = await BookListingModel.findById(listingId).lean();
+      const currentStock = currentListing?.stock ?? 0;
+      throw new AppError(
+        `Insufficient stock: Cannot decrease by ${quantity} because current stock is ${currentStock}`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  } else if (operation === "set") {
+    updatedListing = await BookListingModel.findOneAndUpdate(
+      {
+        _id: listingId,
+      },
+      {
+        $set: { stock: quantity },
+      },
+      {
+        returnDocument: "after",
+      },
+    )
+      .populate({
+        path: "book",
+        populate: [
+          { path: "authors", select: "name nameBn slug photo" },
+          { path: "publisher", select: "name nameBn slug logo" },
+          { path: "categories", select: "name nameBn slug" },
+          { path: "country", select: "name code phoneCode" },
+        ],
+      })
+      .populate("seller", "name email mobileNumber role profilePicture")
+      .lean();
+  }
+
+  if (!updatedListing) {
+    throw new AppError("Failed to update stock", HTTP_STATUS.INTERNAL_SERVER_ERROR);
+  }
+
+  const bookObj = updatedListing.book as unknown as BookDocument;
+  const customImages = updatedListing.listingImages ?? [];
+  const resolvedImages = getMergedAndShuffledBookImages(
+    bookObj?.coverImage,
+    bookObj?.images,
+    customImages,
+  );
+
+  logger.info(
+    {
+      listingId,
+      operation,
+      quantity,
+      newStock: updatedListing.stock,
+      userId: userContext.id,
+    },
+    "Listing stock updated successfully",
+  );
+
+  return {
+    ...updatedListing,
+    coverImage: resolvedImages.coverImage,
+    images: resolvedImages.images,
+    effectiveImages: resolvedImages.effectiveImages,
+  };
+};
+
+export const toggleBookListingStatusService = async (
+  listingId: string,
+  userContext: { id: string; role: string },
+  newStatus?: boolean,
+) => {
+  if (!mongoose.Types.ObjectId.isValid(listingId)) {
+    throw new AppError("Invalid listing ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const listing = await BookListingModel.findById(listingId);
+  if (!listing) {
+    throw new AppError("Book listing not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  // Verify ownership
+  const isOwner = listing.seller.toString() === userContext.id;
+  const isAdmin = userContext.role === "ADMIN";
+
+  if (!isOwner && !isAdmin) {
+    throw new AppError(
+      "Forbidden: You do not own this book listing",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  const updatedIsActive =
+    newStatus !== undefined ? newStatus : !listing.isActive;
+
+  listing.isActive = updatedIsActive;
+  await listing.save();
+
+  logger.info(
+    {
+      listingId: listing._id,
+      isActive: listing.isActive,
+      userId: userContext.id,
+    },
+    "Book listing status toggled successfully",
+  );
+
+  return listing;
+};
+
+
 
