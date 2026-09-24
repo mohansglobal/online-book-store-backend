@@ -10,6 +10,7 @@ import {
   getMyBookListingsService,
   updateListingStockService,
   toggleBookListingStatusService,
+  applyListingDiscountService,
 } from "../services/book-listing.service.js";
 import type {
   BookListingQueryInput,
@@ -18,6 +19,7 @@ import type {
   MyBookListingQueryInput,
   UpdateStockInput,
   ToggleBookListingStatusInput,
+  ApplyListingDiscountInput,
 } from "../validation/book-listing.schema.js";
 
 export const getBookListings = asyncHandler(async (req, res) => {
@@ -133,5 +135,25 @@ export const toggleBookListingStatus = asyncHandler(async (req, res) => {
     listing,
   );
 });
+
+export const applyListingDiscount = asyncHandler(async (req, res) => {
+  const listingId = req.params.id as string;
+  const userContext = req.user!;
+  const input = req.body as ApplyListingDiscountInput;
+
+  const listing = await applyListingDiscountService(
+    listingId,
+    userContext,
+    input,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Listing discount applied and selling price updated successfully",
+    listing,
+  );
+});
+
 
 

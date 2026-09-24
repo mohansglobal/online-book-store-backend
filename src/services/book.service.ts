@@ -87,6 +87,7 @@ export const getBooksService = async (query: BookQueryInput) => {
   if (query.author && query.author.length > 0) {
     const validIds = query.author.filter((id) => objectIdRegex.test(id));
     const matchedAuthors = await AuthorModel.find({
+      isDel: { $ne: true },
       $or: [
         ...(validIds.length > 0 ? [{ _id: { $in: validIds } }] : []),
         { slug: { $in: query.author.map((s) => s.toLowerCase()) } },
@@ -379,6 +380,7 @@ export const createBookService = async (
   const authorCount = await AuthorModel.countDocuments({
     _id: { $in: input.authors },
     isActive: true,
+    isDel: { $ne: true },
   });
   if (authorCount !== input.authors.length) {
     throw new AppError("One or more referenced authors do not exist or are inactive", HTTP_STATUS.BAD_REQUEST);
@@ -433,6 +435,35 @@ export const createBookService = async (
     counter++;
   }
 
+  // 5b. Resolve MRP in Rupees
+  let rawMrpInRupees =
+    input.priceMrp ??
+    input.mrpPrice ??
+    input.mrp ??
+    input.price;
+
+  if (rawMrpInRupees === undefined && input.mrpInPaise !== undefined) {
+    rawMrpInRupees = Math.round(input.mrpInPaise / 100);
+  }
+
+  if (rawMrpInRupees === undefined && input.sellingPrice !== undefined) {
+    rawMrpInRupees = input.sellingPrice;
+  }
+
+  if (rawMrpInRupees === undefined && input.priceIn !== undefined) {
+    rawMrpInRupees = input.priceIn;
+  }
+
+  if (rawMrpInRupees === undefined && input.sellingPriceInPaise !== undefined) {
+    rawMrpInRupees = Math.round(input.sellingPriceInPaise / 100);
+  }
+
+  if (rawMrpInRupees === undefined && input.priceInPaise !== undefined) {
+    rawMrpInRupees = Math.round(input.priceInPaise / 100);
+  }
+
+  const bookMrp = rawMrpInRupees !== undefined ? Math.round(rawMrpInRupees) : 0;
+
   // 6. Create canonical master book
   const newBook = new BookModel({
     title: input.title,
@@ -440,6 +471,8 @@ export const createBookService = async (
     slug,
     legacyId: input.legacyId,
     legacyBookId: input.legacyBookId,
+    price: bookMrp,
+    priceIn: bookMrp,
     isbn: input.isbn,
     description: input.description,
     authors: input.authors.map((id) => new mongoose.Types.ObjectId(id)),
@@ -502,6 +535,7 @@ export const updateBookService = async (
     const authorCount = await AuthorModel.countDocuments({
       _id: { $in: input.authors },
       isActive: true,
+      isDel: { $ne: true },
     });
     if (authorCount !== input.authors.length) {
       throw new AppError("One or more referenced authors do not exist or are inactive", HTTP_STATUS.BAD_REQUEST);
@@ -555,6 +589,30 @@ export const updateBookService = async (
   if (input.images !== undefined) book.images = input.images;
   if (input.status !== undefined) book.status = input.status;
   if (input.translation !== undefined) book.translation = input.translation;
+
+  let updatedMrp: number | undefined;
+  const rawUpdatedMrp =
+    input.priceMrp ??
+    input.mrpPrice ??
+    input.mrp ??
+    input.price ??
+    input.sellingPrice ??
+    input.priceIn;
+
+  if (rawUpdatedMrp !== undefined) {
+    updatedMrp = Math.round(rawUpdatedMrp);
+  } else if (input.mrpInPaise !== undefined) {
+    updatedMrp = Math.round(input.mrpInPaise / 100);
+  } else if (input.sellingPriceInPaise !== undefined) {
+    updatedMrp = Math.round(input.sellingPriceInPaise / 100);
+  } else if (input.priceInPaise !== undefined) {
+    updatedMrp = Math.round(input.priceInPaise / 100);
+  }
+
+  if (updatedMrp !== undefined) {
+    book.price = updatedMrp;
+    book.priceIn = updatedMrp;
+  }
 
   await book.save();
 
@@ -623,7 +681,10 @@ export const lookupBookByIsbnService = async (
     exists: true,
     alreadyListedBySeller,
     existingListingId,
-    book,
+    book: {
+      ...book,
+      images: [],
+    },
   };
 };
 

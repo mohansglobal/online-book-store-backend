@@ -9,6 +9,11 @@ import type {
   UpdateAddressInput,
 } from "../validation/address.schema.js";
 
+
+
+//@desc Get all addresses for a user
+//@route GET /api/v1/addresses
+//@access Private
 export const getAddressesService = async (
   userId: string,
   addressType?: AddressType,
@@ -29,7 +34,9 @@ export const getAddressesService = async (
   return addresses;
 };
 
-
+//@desc Get default address for a user
+//@route GET /api/v1/addresses/default
+//@access Private
 export const getDefaultAddressService = async (
   userId: string,
   addressType?: AddressType,
@@ -51,7 +58,9 @@ export const getDefaultAddressService = async (
   return address;
 };
 
-
+//@desc Get address by ID for a user
+//@route GET /api/v1/addresses/:id
+//@access Private
 export const getAddressByIdService = async (
   userId: string,
   addressId: string,
@@ -74,6 +83,9 @@ export const getAddressByIdService = async (
   return address;
 };
 
+//@desc Create address for a user
+//@route POST /api/v1/addresses
+//@access Private
 export const createAddressService = async (
   userId: string,
   input: CreateAddressInput,
@@ -122,6 +134,9 @@ export const createAddressService = async (
   return address;
 };
 
+//@desc Update address for a user
+//@route PUT /api/v1/addresses/:id
+//@access Private
 export const updateAddressService = async (
   userId: string,
   addressId: string,

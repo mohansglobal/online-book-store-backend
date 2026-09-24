@@ -10,6 +10,7 @@ import {
   myBookListingQuerySchema,
   updateStockSchema,
   toggleBookListingStatusSchema,
+  applyListingDiscountSchema,
 } from "../validation/book-listing.schema.js";
 import {
   getBookListings,
@@ -20,6 +21,7 @@ import {
   updateListingStock,
   toggleBookListingStatus,
   deleteBookListing,
+  applyListingDiscount,
 } from "../controllers/book-listing.controller.js";
 
 const router = Router();
@@ -65,6 +67,16 @@ router.patch(
   validate(updateStockSchema, "body"),
   updateListingStock,
 );
+
+router.patch(
+  "/:id/discount",
+  authenticate,
+  authorize("SELLER", "ADMIN"),
+  validate(bookListingParamSchema, "params"),
+  validate(applyListingDiscountSchema, "body"),
+  applyListingDiscount,
+);
+
 
 router.patch(
   "/:id/status",

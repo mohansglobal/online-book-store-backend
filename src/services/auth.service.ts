@@ -169,33 +169,55 @@ export const refreshTokenService = async (incomingToken: string) => {
 
   try {
     decoded = verifyRefreshToken(incomingToken);
-    console.log("decoded", decoded);
-  } catch {
+    logger.info({ userId: decoded.sub }, "Refresh token JWT verified successfully");
+  } catch (err: unknown) {
+    const errorMessage = err instanceof Error ? err.message : String(err);
+    logger.warn(
+      { error: errorMessage },
+      "Refresh token failed: Invalid or expired JWT signature/payload",
+    );
     throw new AppError(
       "Invalid or expired refresh token",
       HTTP_STATUS.UNAUTHORIZED,
     );
   }
+
+  const userId = decoded.sub;
 
   const existingTokenDoc = await RefreshTokenModel.findOne({
     token: incomingToken,
-    user: decoded.sub,
+    user: userId,
   });
-  console.log("existingTokenDoc", existingTokenDoc);
 
   if (!existingTokenDoc) {
+    logger.warn(
+      { userId },
+      "Refresh token failed: Token document not found in database (possibly already rotated or revoked)",
+    );
     throw new AppError(
       "Invalid or expired refresh token",
       HTTP_STATUS.UNAUTHORIZED,
     );
   }
 
-  // Token rotation: delete old refresh token document
-  await RefreshTokenModel.deleteOne({ _id: existingTokenDoc._id });
+  // Token rotation with a 30-second grace period to allow concurrent in-flight requests to succeed
+  await RefreshTokenModel.updateOne(
+    { _id: existingTokenDoc._id },
+    { $set: { expiresAt: new Date(Date.now() + 30 * 1000) } },
+  );
 
-  const user = await UserModel.findById(decoded.sub).lean();
+  const user = await UserModel.findById(userId).lean();
 
-  if (!user || !user.isActive) {
+  if (!user) {
+    logger.warn({ userId }, "Refresh token failed: User not found");
+    throw new AppError(
+      "User not found or account is deactivated",
+      HTTP_STATUS.UNAUTHORIZED,
+    );
+  }
+
+  if (!user.isActive) {
+    logger.warn({ userId }, "Refresh token failed: User account is inactive");
     throw new AppError(
       "User not found or account is deactivated",
       HTTP_STATUS.UNAUTHORIZED,
@@ -220,7 +242,10 @@ export const refreshTokenService = async (incomingToken: string) => {
     expiresAt,
   });
 
-  logger.info({ userId: user._id }, "Token refreshed successfully");
+  logger.info(
+    { userId: user._id, role: user.role },
+    "Refresh token rotation successful; issued new access token and refresh token",
+  );
 
   return {
     accessToken: newAccessToken,

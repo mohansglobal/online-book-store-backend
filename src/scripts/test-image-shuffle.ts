@@ -1,39 +1,44 @@
-import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
+import { resolveBookImages } from "../utils/image.helper.js";
 
 function runTest() {
-  console.log("=== Testing getMergedAndShuffledBookImages ===");
+  console.log("=== Testing resolveBookImages ===");
 
   const coverImage = "https://res.cloudinary.com/demo/image/upload/v1/covers/cover1.jpg";
-  const images = [
+  const canonicalGallery = [
     "https://res.cloudinary.com/demo/image/upload/v1/gallery/page1.jpg",
     "https://res.cloudinary.com/demo/image/upload/v1/gallery/page2.jpg",
   ];
 
   console.log("Input coverImage:", coverImage);
-  console.log("Input images:", images);
+  console.log("Input canonicalGallery:", canonicalGallery);
 
-  const result1 = getMergedAndShuffledBookImages(coverImage, images);
-  console.log("\nResult 1 (3 merged images shuffled):", result1);
+  const result1 = resolveBookImages(coverImage, canonicalGallery);
+  console.log("\nResult 1 (1 cover + 2 canonical gallery):", result1);
 
+  if (result1.coverImage !== coverImage) {
+    throw new Error(`Expected coverImage ${coverImage}, got ${result1.coverImage}`);
+  }
   if (result1.images.length !== 3) {
-    throw new Error(`Expected 3 merged images, got ${result1.images.length}`);
+    throw new Error(`Expected 3 images, got ${result1.images.length}`);
+  }
+  if (result1.images[0] !== coverImage) {
+    throw new Error("Expected index 0 to be coverImage");
   }
 
-  // Ensure all 3 images are present in the shuffled array
-  if (!result1.images.includes(coverImage) || !result1.images.includes(images[0]) || !result1.images.includes(images[1])) {
-    throw new Error("Missing images in merged result");
-  }
-
-  // Test with custom listingImages
+  // Test with seller listingImages
   const listingImages = ["https://res.cloudinary.com/demo/image/upload/v1/seller/condition1.jpg"];
-  const result2 = getMergedAndShuffledBookImages(coverImage, images, listingImages);
-  console.log("\nResult 2 (4 merged images with listingImages):", result2);
+  const result2 = resolveBookImages(coverImage, canonicalGallery, listingImages);
+  console.log("\nResult 2 (1 cover + 1 seller listing image):", result2);
 
-  if (result2.images.length !== 4) {
-    throw new Error(`Expected 4 merged images, got ${result2.images.length}`);
+  if (result2.images.length !== 2) {
+    throw new Error(`Expected 2 images (1 cover + 1 seller condition), got ${result2.images.length}`);
+  }
+  if (result2.images[0] !== coverImage || result2.images[1] !== listingImages[0]) {
+    throw new Error("Expected [coverImage, listingImages[0]] in exact order");
   }
 
-  console.log("\n✅ All image merge and shuffle tests passed successfully!");
+  console.log("\n✅ All image resolution tests passed successfully!");
 }
 
 runTest();
+

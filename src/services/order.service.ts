@@ -501,7 +501,7 @@ export const createOrderService = async (
 };
 
 const resolveItemCoverImage = (item: {
-  coverImage?: string;
+  coverImage?: string | null;
   book?: unknown;
 }): string => {
   const book = item.book as
@@ -667,10 +667,13 @@ export const getSellerOrdersService = async (
   const sellerFilteredOrders = orders.map((order) => {
     const sellerItems = (order.items || [])
       .filter((item) => {
+        const itemSeller = item.seller as unknown;
         const itemSellerId =
-          item.seller && typeof item.seller === "object" && "_id" in item.seller
-            ? (item.seller as { _id: unknown })._id?.toString()
-            : item.seller?.toString();
+          itemSeller && typeof itemSeller === "object" && "_id" in itemSeller
+            ? String((itemSeller as { _id: unknown })._id)
+            : itemSeller
+              ? String(itemSeller)
+              : "";
         return itemSellerId === sellerId;
       })
       .map((item) => {
@@ -722,10 +725,13 @@ export const getOrderByIdService = async (
 
   const isBuyer = order.buyer?._id?.toString() === userContext.id;
   const isSeller = order.items.some((item) => {
+    const itemSeller = item.seller as unknown;
     const itemSellerId =
-      item.seller && typeof item.seller === "object" && "_id" in item.seller
-        ? (item.seller as { _id: unknown })._id?.toString()
-        : item.seller?.toString();
+      itemSeller && typeof itemSeller === "object" && "_id" in itemSeller
+        ? String((itemSeller as { _id: unknown })._id)
+        : itemSeller
+          ? String(itemSeller)
+          : "";
     return itemSellerId === userContext.id;
   });
   const isAdmin = userContext.role === "ADMIN";

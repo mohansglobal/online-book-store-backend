@@ -25,7 +25,9 @@
     "test:phone-otp": "tsx src/scripts/test-phone-verification.ts",
     "test:bullmq": "node --import tsx src/scripts/test-bullmq-queue.ts",
     "test:smtp": "node --import tsx src/scripts/test-smtp-delivery.ts",
-    "test:seller-stock": "tsx src/scripts/test-seller-listings-and-stock.ts"
+    "test:seller-stock": "tsx src/scripts/test-seller-listings-and-stock.ts",
+    "test:dashboard-orders": "tsx src/scripts/test-dashboard-recent-orders.ts",
+    "test:revenue-analytics": "tsx src/scripts/test-seller-revenue-analytics.ts"
   },
   "keywords": [],
   "author": "",

@@ -23,6 +23,7 @@ import checkoutRouter from "./routes/checkout.routes.js";
 import reviewRouter from "./routes/review.routes.js";
 import countryRouter from "./routes/country.routes.js";
 import uploadRouter from "./routes/upload.routes.js";
+import dashboardRouter from "./routes/dashboard.routes.js";
 
 const app = express();
 
@@ -72,6 +73,7 @@ app.use("/api/v1/checkout", checkoutRouter);
 app.use("/api/v1/reviews", reviewRouter);
 app.use("/api/v1/upload", uploadRouter);
 app.use("/api/v1/uploads", uploadRouter);
+app.use("/api/v1/dashboard", dashboardRouter);
 
 app.use(notFoundHandler);
 app.use(errorHandler);

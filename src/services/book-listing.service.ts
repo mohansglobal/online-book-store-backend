@@ -26,6 +26,7 @@ import {
   type UpdateBookListingInput,
   type MyBookListingQueryInput,
   type UpdateStockInput,
+  type ApplyListingDiscountInput,
 } from "../validation/book-listing.schema.js";
 import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
 
@@ -65,6 +66,7 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   }
 
   // Build canonical book filter for metadata search/filtering (only active books by default)
+  //
   const bookFilter: Record<string, unknown> = {
     status: "ACTIVE",
   };
@@ -89,6 +91,7 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   if (query.author && query.author.length > 0) {
     const validIds = query.author.filter((id) => objectIdRegex.test(id));
     const matchedAuthors = await AuthorModel.find({
+      isDel: { $ne: true },
       $or: [
         ...(validIds.length > 0 ? [{ _id: { $in: validIds } }] : []),
         { slug: { $in: query.author.map((s) => s.toLowerCase()) } },
@@ -345,8 +348,23 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
 
+    const mrpInPaise = listing.mrpInPaise ?? 0;
+    const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
+    const mrp = Math.round(mrpInPaise / 100);
+    const price = Math.round(sellingPriceInPaise / 100);
+    const discountPercentage =
+      mrpInPaise > 0
+        ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
+        : 0;
+
     return {
       ...listing,
+      price,
+      priceInPaise: sellingPriceInPaise,
+      mrp,
+      mrpInPaise,
+      sellingPriceInPaise,
+      discountPercentage,
       coverImage: resolvedImages.coverImage,
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
@@ -424,8 +442,23 @@ export const getBookListingByIdService = async (id: string) => {
     );
   }
 
+  const mrpInPaise = listing.mrpInPaise ?? 0;
+  const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
+  const mrp = Math.round(mrpInPaise / 100);
+  const price = Math.round(sellingPriceInPaise / 100);
+  const discountPercentage =
+    mrpInPaise > 0
+      ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
+      : 0;
+
   return {
     ...listing,
+    price,
+    priceInPaise: sellingPriceInPaise,
+    mrp,
+    mrpInPaise,
+    sellingPriceInPaise,
+    discountPercentage,
     coverImage: resolvedImages.coverImage,
     images: resolvedImages.images,
     effectiveImages: resolvedImages.effectiveImages,
@@ -486,6 +519,8 @@ export const createBookListingService = async (
       input.description &&
       input.coverImage
     ) {
+      const bookMrpInRupees = Math.round(input.mrpInPaise / 100);
+
       targetBook = (await createBookService(
         {
           title: input.title,
@@ -498,11 +533,15 @@ export const createBookListingService = async (
           language: input.language,
           description: input.description,
           coverImage: input.coverImage,
-          images: input.images,
+          images: [],
           pages: input.pages,
           edition: input.edition,
           searchTags: input.searchTags,
-          price: Math.round(input.sellingPriceInPaise / 100),
+          price: bookMrpInRupees,
+          priceIn: bookMrpInRupees,
+          mrp: bookMrpInRupees,
+          mrpInPaise: input.mrpInPaise,
+          sellingPriceInPaise: input.sellingPriceInPaise,
         },
         sellerId,
       )) as BookDocument & { _id: mongoose.Types.ObjectId };
@@ -641,7 +680,7 @@ export const deleteBookListingService = async (
 
 export const getMyBookListingsService = async (
   sellerId: string,
-  rawQuery: MyBookListingQueryInput,
+  rawQuery: MyBookListingQueryInput = {},
 ) => {
   const query = myBookListingQuerySchema.parse(rawQuery);
 
@@ -998,6 +1037,93 @@ export const toggleBookListingStatusService = async (
 
   return listing;
 };
+
+export const applyListingDiscountService = async (
+  listingId: string,
+  userContext: { id: string; role: string },
+  input: ApplyListingDiscountInput,
+) => {
+  const isValidId = mongoose.Types.ObjectId.isValid(listingId);
+  if (!isValidId) {
+    throw new AppError("Invalid listing ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const listing = await BookListingModel.findById(listingId);
+  if (!listing) {
+    throw new AppError("Book listing not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  const isOwner = listing.seller.toString() === userContext.id;
+  const isAdmin = userContext.role === "ADMIN";
+
+  if (!isOwner && !isAdmin) {
+    throw new AppError(
+      "Forbidden: You do not own this book listing",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  // 1. Resolve MRP (use new MRP if provided, otherwise existing listing MRP)
+  let mrpInPaise = listing.mrpInPaise;
+
+  if (input.mrpInPaise !== undefined) {
+    mrpInPaise = input.mrpInPaise;
+  } else if (input.mrp !== undefined) {
+    mrpInPaise = Math.round(input.mrp * 100);
+  }
+
+  if (mrpInPaise <= 0) {
+    throw new AppError(
+      "Cannot calculate discount: MRP must be greater than 0",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  // 2. Calculate discount amount in paise based on MRP
+  const discountType = input.discountType;
+  const discountValue = input.discountValue;
+
+  let discountAmountInPaise = 0;
+
+  if (discountType === "PERCENTAGE") {
+    const discountPercentage = discountValue;
+    discountAmountInPaise = Math.round((mrpInPaise * discountPercentage) / 100);
+  } else {
+    const flatDiscountInRupees = discountValue;
+    discountAmountInPaise = Math.round(flatDiscountInRupees * 100);
+  }
+
+  if (discountAmountInPaise > mrpInPaise) {
+    throw new AppError(
+      "Discount amount cannot exceed MRP",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  // 3. Calculate new selling price
+  const newSellingPriceInPaise = mrpInPaise - discountAmountInPaise;
+
+  // 4. Update and persist listing
+  listing.mrpInPaise = mrpInPaise;
+  listing.sellingPriceInPaise = newSellingPriceInPaise;
+
+  await listing.save();
+
+  logger.info(
+    {
+      listingId: listing._id,
+      mrpInPaise,
+      newSellingPriceInPaise,
+      discountType,
+      discountValue,
+      discountAmountInPaise,
+    },
+    "Listing discount applied and selling price updated successfully",
+  );
+
+  return listing;
+};
+
 
 
 

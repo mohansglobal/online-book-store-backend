@@ -8,6 +8,9 @@ import {
   loginSchema,
   sendOtpSchema,
   verifyOtpSchema,
+  forgotPasswordSchema,
+  verifyPasswordResetOtpSchema,
+  resetPasswordSchema,
 } from "../validation/auth.schema.js";
 import {
   register,
@@ -20,6 +23,9 @@ import {
   sendPhoneOtp,
   candidatePhoneNumberVerify,
   verifyPhoneOtp,
+  forgotPassword,
+  verifyPasswordResetOtp,
+  resetPassword,
 } from "../controllers/auth.controller.js";
 
 const router = Router();
@@ -36,6 +42,24 @@ router.post("/phone/send-otp", optionalAuthenticate, validate(sendOtpSchema), se
 router.post("/verify-otp", optionalAuthenticate, validate(verifyOtpSchema), verifyPhoneOtp);
 router.post("/phone/verify-otp", optionalAuthenticate, validate(verifyOtpSchema), verifyPhoneOtp);
 router.post("/phone/verify", optionalAuthenticate, validate(sendOtpSchema), candidatePhoneNumberVerify);
+
+// Password reset endpoints
+router.post("/forgot-password", validate(forgotPasswordSchema), forgotPassword);
+router.post(
+  "/password-reset/verify-otp",
+  validate(verifyPasswordResetOtpSchema),
+  verifyPasswordResetOtp,
+);
+router.post(
+  "/password-reset",
+  validate(resetPasswordSchema),
+  resetPassword,
+);
+router.post(
+  "/reset-password",
+  validate(resetPasswordSchema),
+  resetPassword,
+);
 
 // Profile image endpoints
 router.post(

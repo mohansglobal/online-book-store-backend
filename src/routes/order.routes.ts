@@ -10,6 +10,7 @@ import {
   initiateRazorpayOrderSchema,
   cancelOrderSchema,
 } from "../validation/order.schema.js";
+import { sellerDashboardRecentOrdersQuerySchema } from "../validation/dashboard.schema.js";
 import {
   createOrder,
   getMyOrders,
@@ -19,6 +20,7 @@ import {
   initiateRazorpayOrder,
   cancelOrder,
 } from "../controllers/order.controller.js";
+import { getSellerRecentOrders } from "../controllers/dashboard.controller.js";
 
 const router = Router();
 
@@ -60,6 +62,18 @@ router.get(
   authorize("SELLER", "ADMIN"),
   validate(orderQuerySchema, "query"),
   getSellerOrders,
+);
+router.get(
+  "/seller/recent",
+  authorize("SELLER", "ADMIN"),
+  validate(sellerDashboardRecentOrdersQuerySchema, "query"),
+  getSellerRecentOrders,
+);
+router.get(
+  "/seller/recent-orders",
+  authorize("SELLER", "ADMIN"),
+  validate(sellerDashboardRecentOrdersQuerySchema, "query"),
+  getSellerRecentOrders,
 );
 router.get("/:id", validate(orderParamSchema, "params"), getOrderById);
 

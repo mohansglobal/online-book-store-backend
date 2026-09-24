@@ -197,8 +197,15 @@ export const createBookSchema = z.object({
   titleBn: z.string().trim().max(250).optional(),
   legacyId: z.string().trim().optional(),
   legacyBookId: z.string().trim().optional(),
-  price: z.number().nonnegative("Price cannot be negative").optional(),
-  priceIn: z.number().nonnegative("Price cannot be negative").optional(),
+  price: z.coerce.number().nonnegative("Price cannot be negative").optional(),
+  priceIn: z.coerce.number().nonnegative("Price cannot be negative").optional(),
+  priceMrp: z.coerce.number().nonnegative("MRP cannot be negative").optional(),
+  mrp: z.coerce.number().nonnegative("MRP cannot be negative").optional(),
+  mrpPrice: z.coerce.number().nonnegative("MRP cannot be negative").optional(),
+  mrpInPaise: z.coerce.number().nonnegative("MRP in paise cannot be negative").optional(),
+  sellingPrice: z.coerce.number().nonnegative("Selling price cannot be negative").optional(),
+  sellingPriceInPaise: z.coerce.number().nonnegative("Selling price in paise cannot be negative").optional(),
+  priceInPaise: z.coerce.number().nonnegative("Price in paise cannot be negative").optional(),
   isbn: z
     .string()
     .trim()

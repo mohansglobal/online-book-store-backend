@@ -13,7 +13,7 @@ const startServer = async () => {
 
     // Start background queue workers
     initWorkers();
-
+    
     const server = app.listen(env.PORT, () => {
       logger.info(`Server running on http://localhost:${env.PORT}`);
     });

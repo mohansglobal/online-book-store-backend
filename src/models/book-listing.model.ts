@@ -69,6 +69,22 @@ const bookListingSchema = new Schema(
   },
 );
 
+bookListingSchema.virtual("price").get(function () {
+  return typeof this.sellingPriceInPaise === "number"
+    ? Math.round(this.sellingPriceInPaise / 100)
+    : 0;
+});
+
+bookListingSchema.virtual("priceInPaise").get(function () {
+  return this.sellingPriceInPaise ?? 0;
+});
+
+bookListingSchema.virtual("mrp").get(function () {
+  return typeof this.mrpInPaise === "number"
+    ? Math.round(this.mrpInPaise / 100)
+    : 0;
+});
+
 bookListingSchema.virtual("discountPercentage").get(function () {
   if (!this.mrpInPaise || this.mrpInPaise <= 0) return 0;
   return Math.round(
@@ -80,18 +96,47 @@ bookListingSchema.virtual("effectiveImages").get(function (this: {
   listingImages?: string[];
   book?: { images?: string[]; coverImage?: string };
 }) {
-  if (this.listingImages && this.listingImages.length > 0) {
-    return this.listingImages;
+  const cover =
+    this.book && typeof this.book === "object" && this.book.coverImage
+      ? this.book.coverImage.trim()
+      : "";
+
+  const extraImages = Array.isArray(this.listingImages)
+    ? this.listingImages.filter(
+        (img) => typeof img === "string" && img.trim().length > 0,
+      )
+    : [];
+
+  const images: string[] = [];
+  if (cover) {
+    images.push(cover);
   }
-  if (this.book && typeof this.book === "object") {
-    if (this.book.images && this.book.images.length > 0) {
-      return this.book.images;
-    }
-    if (this.book.coverImage) {
-      return [this.book.coverImage];
+
+  for (const img of extraImages) {
+    const trimmed = img.trim();
+    if (!images.includes(trimmed)) {
+      images.push(trimmed);
     }
   }
-  return [];
+
+  if (
+    images.length === 0 &&
+    this.book &&
+    typeof this.book === "object" &&
+    Array.isArray(this.book.images)
+  ) {
+    for (const img of this.book.images) {
+      if (
+        typeof img === "string" &&
+        img.trim().length > 0 &&
+        !images.includes(img.trim())
+      ) {
+        images.push(img.trim());
+      }
+    }
+  }
+
+  return images;
 });
 
 bookListingSchema.index({ book: 1, seller: 1 }, { unique: true });

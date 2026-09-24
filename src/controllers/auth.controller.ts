@@ -2,6 +2,7 @@ import { asyncHandler } from "../utils/async-handler.js";
 import { apiResponse } from "../utils/api-response.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { AppError } from "../utils/app-error.js";
+import { logger } from "../utils/logger.js";
 import {
   registerUserService,
   loginUserService,
@@ -13,6 +14,11 @@ import {
   sendPhoneOtpService,
   verifyPhoneOtpService,
 } from "../services/auth.service.js";
+import {
+  forgotPasswordService,
+  verifyPasswordResetOtpService,
+  resetPasswordService,
+} from "../services/password-reset.service.js";
 import { env } from "../config/env.js";
 import { ACCESS_TOKEN_COOKIE_MAX_AGE_MS, REFRESH_TOKEN_COOKIE_MAX_AGE_MS } from "../constants/jwt-time.js";
 
@@ -48,13 +54,33 @@ export const login = asyncHandler(async (req, res) => {
 });
 
 export const refreshToken = asyncHandler(async (req, res) => {
-  const token = req.cookies?.refreshToken;
+  const cookieToken = req.cookies?.refreshToken as string | undefined;
+  const bodyToken = req.body?.refreshToken as string | undefined;
+  const token = cookieToken || bodyToken;
+
+  logger.info(
+    {
+      hasCookieToken: Boolean(cookieToken),
+      hasBodyToken: Boolean(bodyToken),
+      ip: req.ip,
+    },
+    "Refresh token endpoint called",
+  );
 
   if (!token) {
+    logger.warn(
+      {
+        hasCookieToken: Boolean(cookieToken),
+        hasBodyToken: Boolean(bodyToken),
+        cookieKeys: Object.keys(req.cookies || {}),
+      },
+      "Refresh token request rejected: No token found in cookies or body",
+    );
     throw new AppError("Refresh token is required", HTTP_STATUS.UNAUTHORIZED);
   }
 
-  const { accessToken, refreshToken: newRefreshToken } = await refreshTokenService(token);
+  const { accessToken, refreshToken: newRefreshToken } =
+    await refreshTokenService(token);
 
   res.cookie("accessToken", accessToken, {
     httpOnly: true,
@@ -71,6 +97,8 @@ export const refreshToken = asyncHandler(async (req, res) => {
     maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE_MS,
     path: "/",
   });
+
+  logger.info("Access token refreshed successfully in controller");
 
   apiResponse(res, HTTP_STATUS.OK, "Access token refreshed successfully", {
     accessToken,
@@ -155,6 +183,25 @@ export const verifyPhoneOtp = asyncHandler(async (req, res) => {
 
   apiResponse(res, HTTP_STATUS.OK, result.message, result);
 });
+
+export const forgotPassword = asyncHandler(async (req, res) => {
+  const result = await forgotPasswordService(req.body);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+export const verifyPasswordResetOtp = asyncHandler(async (req, res) => {
+  const result = await verifyPasswordResetOtpService(req.body);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+export const resetPassword = asyncHandler(async (req, res) => {
+  const result = await resetPasswordService(req.body);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
 
 
 

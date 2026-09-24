@@ -66,7 +66,6 @@ export const sendOtpSchema = z.object({
 });
 
 export type SendOtpInput = z.infer<typeof sendOtpSchema>;
-
 export const verifyOtpSchema = z.object({
   mobileNumber: z
     .string()
@@ -83,4 +82,43 @@ export const verifyOtpSchema = z.object({
 });
 
 export type VerifyOtpInput = z.infer<typeof verifyOtpSchema>;
+
+export const forgotPasswordSchema = z.object({
+  identifier: z
+    .string()
+    .trim()
+    .min(3, "Email or mobile number is required")
+    .max(100, "Identifier cannot exceed 100 characters"),
+});
+
+export type ForgotPasswordInput = z.infer<typeof forgotPasswordSchema>;
+
+export const verifyPasswordResetOtpSchema = z.object({
+  identifier: z
+    .string()
+    .trim()
+    .min(3, "Email or mobile number is required")
+    .max(100, "Identifier cannot exceed 100 characters"),
+  otp: z
+    .string()
+    .trim()
+    .length(6, "OTP must be exactly 6 digits")
+    .regex(/^\d{6}$/, "OTP must contain only numbers"),
+});
+
+export type VerifyPasswordResetOtpInput = z.infer<typeof verifyPasswordResetOtpSchema>;
+
+export const resetPasswordSchema = z.object({
+  resetToken: z
+    .string()
+    .trim()
+    .min(1, "Reset token is required"),
+  newPassword: z
+    .string()
+    .min(8, "Password must be at least 8 characters")
+    .max(100, "Password cannot exceed 100 characters"),
+});
+
+export type ResetPasswordInput = z.infer<typeof resetPasswordSchema>;
+
 

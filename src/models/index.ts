@@ -12,4 +12,5 @@ export * from "./wishlist.model.js";
 export * from "./address.model.js";
 export * from "./phone-verification.model.js";
 export * from "./review.model.js";
+export * from "./password-reset.model.js";
 

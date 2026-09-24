@@ -225,17 +225,25 @@ export const createBookListingSchema = z
     coverImage: z.string().trim().optional(),
     images: z.array(z.string().trim()).optional(),
     price: z.coerce.number().nonnegative().optional(),
+    priceIn: z.coerce.number().nonnegative().optional(),
     priceMrp: z.coerce.number().nonnegative().optional(),
     mrp: z.coerce.number().nonnegative().optional(),
+    mrpPrice: z.coerce.number().nonnegative().optional(),
     mrpInPaise: z.coerce
       .number()
       .int("MRP must be an integer in paise")
       .nonnegative("MRP cannot be negative")
       .optional(),
+    sellingPrice: z.coerce.number().nonnegative().optional(),
     sellingPriceInPaise: z.coerce
       .number()
       .int("Selling price must be an integer in paise")
       .nonnegative("Selling price cannot be negative")
+      .optional(),
+    priceInPaise: z.coerce
+      .number()
+      .int("Price must be an integer in paise")
+      .nonnegative("Price cannot be negative")
       .optional(),
     stock: z.coerce
       .number()
@@ -248,22 +256,25 @@ export const createBookListingSchema = z
     isActive: z.boolean().optional().default(true),
   })
   .transform((data) => {
+    // 1. Resolve MRP in paise
     let mrpInPaise = data.mrpInPaise;
     if (mrpInPaise === undefined) {
-      const rawMrp = data.priceMrp ?? data.mrp ?? data.price;
-      if (rawMrp !== undefined) {
-        mrpInPaise = Math.round(rawMrp * 100);
+      const rawMrpInRupees = data.priceMrp ?? data.mrpPrice ?? data.mrp;
+      if (rawMrpInRupees !== undefined) {
+        mrpInPaise = Math.round(rawMrpInRupees * 100);
       }
     }
 
-    let sellingPriceInPaise = data.sellingPriceInPaise;
+    // 2. Resolve Selling Price in paise
+    let sellingPriceInPaise = data.sellingPriceInPaise ?? data.priceInPaise;
     if (sellingPriceInPaise === undefined) {
-      const rawSelling = data.price ?? data.mrp ?? data.priceMrp;
-      if (rawSelling !== undefined) {
-        sellingPriceInPaise = Math.round(rawSelling * 100);
+      const rawSellingInRupees = data.sellingPrice ?? data.price ?? data.priceIn;
+      if (rawSellingInRupees !== undefined) {
+        sellingPriceInPaise = Math.round(rawSellingInRupees * 100);
       }
     }
 
+    // 3. Fallbacks if only one value was provided
     if (mrpInPaise === undefined && sellingPriceInPaise !== undefined) {
       mrpInPaise = sellingPriceInPaise;
     }
@@ -343,15 +354,26 @@ export type CreateBookListingOutput = z.output<typeof createBookListingSchema>;
 
 export const updateBookListingSchema = z
   .object({
+    price: z.coerce.number().nonnegative().optional(),
+    priceIn: z.coerce.number().nonnegative().optional(),
+    priceMrp: z.coerce.number().nonnegative().optional(),
+    mrp: z.coerce.number().nonnegative().optional(),
+    mrpPrice: z.coerce.number().nonnegative().optional(),
     mrpInPaise: z.coerce
       .number()
       .int("MRP must be an integer in paise")
       .nonnegative("MRP cannot be negative")
       .optional(),
+    sellingPrice: z.coerce.number().nonnegative().optional(),
     sellingPriceInPaise: z.coerce
       .number()
       .int("Selling price must be an integer in paise")
       .nonnegative("Selling price cannot be negative")
+      .optional(),
+    priceInPaise: z.coerce
+      .number()
+      .int("Price must be an integer in paise")
+      .nonnegative("Price cannot be negative")
       .optional(),
     stock: z.coerce
       .number()
@@ -364,6 +386,22 @@ export const updateBookListingSchema = z
     isActive: z.boolean().optional(),
   })
   .transform((data) => {
+    let mrpInPaise = data.mrpInPaise;
+    if (mrpInPaise === undefined) {
+      const rawMrpInRupees = data.priceMrp ?? data.mrpPrice ?? data.mrp;
+      if (rawMrpInRupees !== undefined) {
+        mrpInPaise = Math.round(rawMrpInRupees * 100);
+      }
+    }
+
+    let sellingPriceInPaise = data.sellingPriceInPaise ?? data.priceInPaise;
+    if (sellingPriceInPaise === undefined) {
+      const rawSellingInRupees = data.sellingPrice ?? data.price ?? data.priceIn;
+      if (rawSellingInRupees !== undefined) {
+        sellingPriceInPaise = Math.round(rawSellingInRupees * 100);
+      }
+    }
+
     const resolvedListingImages =
       data.listingImages !== undefined
         ? data.listingImages
@@ -372,8 +410,8 @@ export const updateBookListingSchema = z
           : undefined;
 
     return {
-      mrpInPaise: data.mrpInPaise,
-      sellingPriceInPaise: data.sellingPriceInPaise,
+      mrpInPaise,
+      sellingPriceInPaise,
       stock: data.stock,
       sku: data.sku,
       listingImages: resolvedListingImages,
@@ -495,7 +533,7 @@ export const myBookListingQuerySchema = z
     };
   });
 
-export type MyBookListingQueryInput = z.infer<typeof myBookListingQuerySchema>;
+export type MyBookListingQueryInput = z.input<typeof myBookListingQuerySchema>;
 
 export const updateStockSchema = z
   .object({
@@ -531,6 +569,40 @@ export const toggleBookListingStatusSchema = z.object({
 });
 
 export type ToggleBookListingStatusInput = z.infer<typeof toggleBookListingStatusSchema>;
+
+export const applyListingDiscountSchema = z
+  .object({
+    discountType: z
+      .enum(["PERCENTAGE", "FLAT", "percentage", "flat"])
+      .transform((val) => val.toUpperCase() as "PERCENTAGE" | "FLAT"),
+    discountValue: z.coerce
+      .number()
+      .min(0, "Discount value cannot be negative"),
+    mrp: z.coerce
+      .number()
+      .positive("MRP in rupees must be positive")
+      .optional(),
+    mrpInPaise: z.coerce
+      .number()
+      .int("MRP in paise must be an integer")
+      .positive("MRP in paise must be positive")
+      .optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.discountType === "PERCENTAGE" && data.discountValue > 100) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: "Percentage discount cannot exceed 100%",
+      path: ["discountValue"],
+    },
+  );
+
+export type ApplyListingDiscountInput = z.infer<typeof applyListingDiscountSchema>;
+
 
 
 

@@ -4,9 +4,6 @@ import { env } from "./env.js";
 import { logger } from "../utils/logger.js";
 
 
-//Standard Redis connection options for BullMQ queues and workers.
-//Note: `maxRetriesPerRequest: null` is strictly required by BullMQ.
-
 export const redisConnectionOptions: RedisOptions = (env.REDIS_URL
   ? {
       maxRetriesPerRequest: null,
