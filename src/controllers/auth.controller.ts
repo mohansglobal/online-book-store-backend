@@ -13,12 +13,21 @@ import {
   removeUserProfileImageService,
   sendPhoneOtpService,
   verifyPhoneOtpService,
+  changePasswordService,
 } from "../services/auth.service.js";
 import {
   forgotPasswordService,
   verifyPasswordResetOtpService,
   resetPasswordService,
 } from "../services/password-reset.service.js";
+import {
+  getAccountDeletionInfoService,
+  sendAccountDeletionOtpService,
+  confirmAccountDeletionService,
+  cancelAccountDeletionService,
+  restoreAccountWithCredentialsService,
+  purgeExpiredDeletedAccountsService,
+} from "../services/account-deletion.service.js";
 import { env } from "../config/env.js";
 import { ACCESS_TOKEN_COOKIE_MAX_AGE_MS, REFRESH_TOKEN_COOKIE_MAX_AGE_MS } from "../constants/jwt-time.js";
 
@@ -198,6 +207,79 @@ export const verifyPasswordResetOtp = asyncHandler(async (req, res) => {
 
 export const resetPassword = asyncHandler(async (req, res) => {
   const result = await resetPasswordService(req.body);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+export const changePassword = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const currentPassword = req.body.currentPassword;
+  const newPassword = req.body.newPassword;
+
+  const result = await changePasswordService({
+    userId,
+    currentPassword,
+    newPassword,
+  });
+
+  apiResponse(res, HTTP_STATUS.OK, result.message);
+});
+
+export const updatePassword = changePassword;
+
+export const getAccountDeletionInfo = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const result = await getAccountDeletionInfoService(userId);
+
+  apiResponse(res, HTTP_STATUS.OK, "Account deletion information retrieved", result);
+});
+
+export const sendAccountDeletionOtp = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const result = await sendAccountDeletionOtpService(userId);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+export const confirmAccountDeletion = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const { otp, confirmation, reason } = req.body;
+
+  const result = await confirmAccountDeletionService({
+    userId,
+    otp,
+    confirmation,
+    reason,
+  });
+
+  const clearCookieOptions = {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: env.NODE_ENV === "production" ? ("strict" as const) : ("lax" as const),
+    path: "/",
+  };
+
+  res.clearCookie("accessToken", clearCookieOptions);
+  res.clearCookie("refreshToken", clearCookieOptions);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
+});
+
+export const cancelAccountDeletion = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const result = await cancelAccountDeletionService(userId);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message);
+});
+
+export const restoreAccount = asyncHandler(async (req, res) => {
+  const result = await restoreAccountWithCredentialsService(req.body);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message);
+});
+
+export const purgeExpiredAccounts = asyncHandler(async (_req, res) => {
+  const result = await purgeExpiredDeletedAccountsService();
 
   apiResponse(res, HTTP_STATUS.OK, result.message, result);
 });

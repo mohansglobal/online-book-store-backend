@@ -199,9 +199,9 @@ export const verifyPasswordResetOtpService = async (
   const rawIdentifier = input.identifier.trim();
   const trimmedOtp = input.otp.trim();
   const isEmail = rawIdentifier.includes("@");
-
+  
   let user = null;
-
+  
   if (isEmail) {
     const normalizedEmail = rawIdentifier.toLowerCase();
     user = await UserModel.findOne({ email: normalizedEmail }).lean();

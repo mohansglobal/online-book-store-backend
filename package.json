@@ -27,7 +27,9 @@
     "test:smtp": "node --import tsx src/scripts/test-smtp-delivery.ts",
     "test:seller-stock": "tsx src/scripts/test-seller-listings-and-stock.ts",
     "test:dashboard-orders": "tsx src/scripts/test-dashboard-recent-orders.ts",
-    "test:revenue-analytics": "tsx src/scripts/test-seller-revenue-analytics.ts"
+    "test:revenue-analytics": "tsx src/scripts/test-seller-revenue-analytics.ts",
+    "test:change-password": "tsx src/scripts/test-change-password-api.ts",
+    "test:account-deletion": "tsx src/scripts/test-account-deletion-api.ts"
   },
   "keywords": [],
   "author": "",

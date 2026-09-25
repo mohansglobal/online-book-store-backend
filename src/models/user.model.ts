@@ -55,6 +55,25 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    isDeleted: {
+      type: Boolean,
+      default: false,
+    },
+    deletionStatus: {
+      type: String,
+      enum: ["NONE", "SCHEDULED", "PERMANENTLY_DELETED"],
+      default: "NONE",
+    },
+    deletionRequestedAt: {
+      type: Date,
+    },
+    scheduledPermanentDeletionAt: {
+      type: Date,
+    },
+    deletionReason: {
+      type: String,
+      trim: true,
+    },
   },
   {
     timestamps: true,
@@ -64,6 +83,7 @@ const userSchema = new Schema(
 
 userSchema.index({ country: 1 });
 userSchema.index({ mobileNumber: 1 }, { unique: true, sparse: true });
+userSchema.index({ deletionStatus: 1, scheduledPermanentDeletionAt: 1 });
 
 export type UserDocument = InferSchemaType<typeof userSchema>;
 

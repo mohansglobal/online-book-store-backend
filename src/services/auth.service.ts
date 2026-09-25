@@ -19,7 +19,11 @@ import {
   sendPhoneOtpService,
   verifyPhoneOtpService,
 } from "./phone-verification.service.js";
-import type { RegisterInput, LoginInput } from "../validation/auth.schema.js";
+import type {
+  RegisterInput,
+  LoginInput,
+  ChangePasswordInput,
+} from "../validation/auth.schema.js";
 
 const BCRYPT_SALT_ROUNDS = 12;
 const REFRESH_TOKEN_EXPIRY_DAYS = 7;
@@ -108,6 +112,16 @@ export const loginUserService = async (input: LoginInput) => {
   }
 
   if (!user.isActive) {
+    if (user.deletionStatus === "SCHEDULED") {
+      const scheduledDate = user.scheduledPermanentDeletionAt
+        ? new Date(user.scheduledPermanentDeletionAt).toISOString().split("T")[0]
+        : "in 30 days";
+      throw new AppError(
+        `Your account is scheduled for permanent deletion on ${scheduledDate}. You can restore your account via the restore-account endpoint.`,
+        HTTP_STATUS.FORBIDDEN,
+      );
+    }
+
     throw new AppError(
       "Account is inactive or deactivated",
       HTTP_STATUS.FORBIDDEN,
@@ -411,5 +425,67 @@ export const removeUserProfileImageService = async (userId: string) => {
 };
 
 export { sendPhoneOtpService, verifyPhoneOtpService } from "./phone-verification.service.js";
+
+export interface ChangePasswordServiceInput {
+  userId: string;
+  currentPassword: string;
+  newPassword: string;
+}
+
+export const changePasswordService = async ({
+  userId,
+  currentPassword,
+  newPassword,
+}: ChangePasswordServiceInput) => {
+  const user = await UserModel.findById(userId).select("+password");
+
+  if (!user) {
+    throw new AppError("User not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (!user.isActive) {
+    throw new AppError(
+      "Account is inactive or deactivated",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  const isCurrentPasswordValid = await bcrypt.compare(
+    currentPassword,
+    user.password,
+  );
+
+  if (!isCurrentPasswordValid) {
+    throw new AppError(
+      "Current password is incorrect",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  const isSamePassword = await bcrypt.compare(newPassword, user.password);
+
+  if (isSamePassword) {
+    throw new AppError(
+      "New password cannot be the same as current password",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  const hashedPassword = await bcrypt.hash(newPassword, BCRYPT_SALT_ROUNDS);
+
+  user.password = hashedPassword;
+  await user.save();
+
+  // Invalidate active refresh tokens across devices
+  await RefreshTokenModel.deleteMany({ user: user._id });
+
+  logger.info({ userId: user._id }, "User password changed successfully");
+
+  return {
+    message: "Password updated successfully",
+  };
+};
+
+export const updatePasswordService = changePasswordService;
 
 
