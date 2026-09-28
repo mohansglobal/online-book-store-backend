@@ -20,6 +20,7 @@
     "update:prices": "tsx src/scripts/update-book-prices.ts",
     "test:razorpay": "tsx src/scripts/test-razorpay-order.ts",
     "test:cancel": "tsx src/scripts/test-order-cancel-and-filter.ts",
+    "test:multi-order": "tsx src/scripts/test-multi-item-multi-seller-cancel.ts",
     "test:cloudinary": "tsx src/scripts/test-cloudinary-config.ts",
     "test:profile-image": "tsx src/scripts/test-profile-image-upload.ts",
     "test:phone-otp": "tsx src/scripts/test-phone-verification.ts",

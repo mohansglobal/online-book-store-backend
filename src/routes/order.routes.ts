@@ -6,9 +6,11 @@ import {
   createOrderSchema,
   orderQuerySchema,
   orderParamSchema,
+  orderItemParamSchema,
   verifyPaymentSchema,
   initiateRazorpayOrderSchema,
   cancelOrderSchema,
+  updateOrderItemFulfillmentSchema,
 } from "../validation/order.schema.js";
 import { sellerDashboardRecentOrdersQuerySchema } from "../validation/dashboard.schema.js";
 import {
@@ -19,6 +21,8 @@ import {
   verifyOrderPayment,
   initiateRazorpayOrder,
   cancelOrder,
+  cancelOrderItem,
+  updateOrderItemFulfillment,
 } from "../controllers/order.controller.js";
 import { getSellerRecentOrders } from "../controllers/dashboard.controller.js";
 
@@ -45,12 +49,29 @@ router.post(
   verifyOrderPayment,
 );
 
-// 4) Cancel Order: POST /api/v1/orders/:id/cancel
+// 4) Cancel Order: POST /api/v1/orders/:id/cancel (cancels specified itemIds or all items)
 router.post(
   "/:id/cancel",
   validate(orderParamSchema, "params"),
   validate(cancelOrderSchema, "body"),
   cancelOrder,
+);
+
+// 4a) Cancel Single Order Item: POST /api/v1/orders/:id/items/:itemId/cancel
+router.post(
+  "/:id/items/:itemId/cancel",
+  validate(orderItemParamSchema, "params"),
+  validate(cancelOrderSchema, "body"),
+  cancelOrderItem,
+);
+
+// 4b) Seller Item Fulfillment & Tracking: PATCH /api/v1/orders/:id/items/:itemId/fulfillment
+router.patch(
+  "/:id/items/:itemId/fulfillment",
+  authorize("SELLER", "ADMIN"),
+  validate(orderItemParamSchema, "params"),
+  validate(updateOrderItemFulfillmentSchema, "body"),
+  updateOrderItemFulfillment,
 );
 
 // 5) See all orders: GET /api/v1/orders (with /me as alias)

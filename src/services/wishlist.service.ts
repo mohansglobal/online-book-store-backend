@@ -289,3 +289,58 @@ export const clearWishlistService = async (userId: string) => {
   }
   return { message: "Wishlist cleared successfully" };
 };
+
+/**
+ * Retrieves the array of canonical Book IDs present in the user's wishlist.
+ * Fast covered projection query optimized for client-side O(1) membership checks.
+ */
+export const getWishlistBookIdsService = async (
+  userId: string,
+): Promise<string[]> => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
+  const wishlist = await WishlistModel.findOne(
+    { user: userObjectId },
+    { "items.book": 1, _id: 0 },
+  ).lean();
+
+  if (!wishlist || !wishlist.items) {
+    return [];
+  }
+
+  const bookIds: string[] = [];
+
+  for (const item of wishlist.items) {
+    if (item.book) {
+      bookIds.push(item.book.toString());
+    }
+  }
+
+  return bookIds;
+};
+
+/**
+ * Checks whether a specific book (or book listing) is in the user's wishlist.
+ */
+export const checkBookInWishlistService = async (
+  userId: string,
+  bookIdOrListingId: string,
+): Promise<boolean> => {
+  const canonicalBookId = await resolveCanonicalBookId(bookIdOrListingId);
+
+  if (!canonicalBookId) {
+    return false;
+  }
+
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
+  const exists = await WishlistModel.exists({
+    user: userObjectId,
+    "items.book": canonicalBookId,
+  });
+
+  const isWishlisted = Boolean(exists);
+
+  return isWishlisted;
+};
+

@@ -9,6 +9,8 @@ import {
 } from "../validation/wishlist.schema.js";
 import {
   getWishlist,
+  getWishlistBookIds,
+  checkBookWishlistStatus,
   addToWishlist,
   syncWishlist,
   removeFromWishlist,
@@ -20,6 +22,12 @@ const router = Router();
 router.use(authenticate);
 
 router.get("/", getWishlist);
+router.get("/ids", getWishlistBookIds);
+router.get(
+  "/check/:bookId",
+  validate(wishlistParamSchema, "params"),
+  checkBookWishlistStatus,
+);
 router.post("/", validate(addToWishlistSchema, "body"), addToWishlist);
 router.post("/sync", validate(syncWishlistSchema, "body"), syncWishlist);
 router.delete(

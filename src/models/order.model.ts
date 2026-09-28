@@ -1,6 +1,18 @@
-import { Schema, model, type InferSchemaType } from "mongoose";
+import { Schema, model, Types, type InferSchemaType } from "mongoose";
 
 export const ORDER_STATUSES = [
+  "PENDING",
+  "CONFIRMED",
+  "PROCESSING",
+  "PARTIALLY_SHIPPED",
+  "SHIPPED",
+  "DELIVERED",
+  "PARTIALLY_CANCELLED",
+  "CANCELLED",
+] as const;
+export type OrderStatus = (typeof ORDER_STATUSES)[number];
+
+export const ORDER_ITEM_STATUSES = [
   "PENDING",
   "CONFIRMED",
   "PROCESSING",
@@ -8,7 +20,7 @@ export const ORDER_STATUSES = [
   "DELIVERED",
   "CANCELLED",
 ] as const;
-export type OrderStatus = (typeof ORDER_STATUSES)[number];
+export type OrderItemStatus = (typeof ORDER_ITEM_STATUSES)[number];
 
 export const PAYMENT_STATUSES = [
   "PENDING",
@@ -20,6 +32,10 @@ export type PaymentStatus = (typeof PAYMENT_STATUSES)[number];
 
 const orderItemSchema = new Schema(
   {
+    _id: {
+      type: Schema.Types.ObjectId,
+      default: () => new Types.ObjectId(),
+    },
     bookListing: {
       type: Schema.Types.ObjectId,
       ref: "BookListing",
@@ -59,9 +75,28 @@ const orderItemSchema = new Schema(
       required: true,
       min: 0,
     },
+    status: {
+      type: String,
+      enum: ORDER_ITEM_STATUSES,
+      default: "PENDING",
+    },
+    estimatedDeliveryDate: {
+      type: Date,
+    },
+    tracking: {
+      courier: { type: String, trim: true },
+      trackingNumber: { type: String, trim: true },
+      trackingUrl: { type: String, trim: true },
+      shippedAt: { type: Date },
+      deliveredAt: { type: Date },
+    },
+    cancellation: {
+      cancelledAt: { type: Date },
+      cancellationReason: { type: String, trim: true },
+    },
   },
   {
-    _id: false,
+    _id: false, // _id field is explicitly defined above with default ObjectId generator
   },
 );
 
@@ -177,9 +212,14 @@ const orderSchema = new Schema(
       type: Schema.Types.ObjectId,
       ref: "User",
     },
+    refundAmountInPaise: {
+      type: Number,
+      min: 0,
+      default: 0,
+    },
     refundStatus: {
       type: String,
-      enum: ["NONE", "PENDING", "PROCESSED", "FAILED"],
+      enum: ["NONE", "PENDING", "PARTIALLY_REFUNDED", "PROCESSED", "FAILED"],
       default: "NONE",
     },
   },

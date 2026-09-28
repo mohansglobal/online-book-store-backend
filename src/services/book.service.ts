@@ -6,7 +6,8 @@ import {
   type BookDocument,
   type BookStatus,
 } from "../models/book.model.js";
-import { BookListingModel, type BookListingDocument } from "../models/book-listing.model.js";
+import { BookListingModel } from "../models/book-listing.model.js";
+import { WishlistModel } from "../models/wishlist.model.js";
 import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CategoryModel } from "../models/category.model.js";
@@ -263,7 +264,10 @@ export const getBooksService = async (query: BookQueryInput) => {
   };
 };
 
-export const getBookByIdOrSlugService = async (idOrSlug: string) => {
+export const getBookByIdOrSlugService = async (
+  idOrSlug: string,
+  userId?: string,
+) => {
   const trimmed = idOrSlug.trim();
   const isObjectId = mongoose.Types.ObjectId.isValid(trimmed);
 
@@ -302,6 +306,20 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
       })),
     ),
   ]);
+
+  let isWishlisted = false;
+
+  if (userId && mongoose.Types.ObjectId.isValid(userId)) {
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const bookObjectId = book._id as mongoose.Types.ObjectId;
+
+    const exists = await WishlistModel.exists({
+      user: userObjectId,
+      "items.book": bookObjectId,
+    });
+
+    isWishlisted = Boolean(exists);
+  }
 
   const mainBookImages = getMergedAndShuffledBookImages(
     book.coverImage,
@@ -347,6 +365,7 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
 
   return {
     ...book,
+    isWishlisted,
     coverImage: mainBookImages.coverImage,
     images: mainBookImages.images,
     effectiveImages: mainBookImages.effectiveImages,
@@ -359,6 +378,95 @@ export const getBookByIdOrSlugService = async (idOrSlug: string) => {
     reviewStats: bookOverallReviewStats,
     listings,
   };
+};
+
+/**
+ * Validates International ISBN Agency standards:
+ * 1. Different publisher -> different ISBN
+ * 2. Different format/binding (Paperback vs Hardcover) -> different ISBN
+ * 3. Different language -> different ISBN
+ * 4. Different edition -> different ISBN
+ */
+
+
+
+
+export const validateIsbnStandards = async (
+  rawIsbn: string | undefined | null,
+  metadata: {
+    publisher?: string | mongoose.Types.ObjectId | null;
+    format?: string | null;
+    language?: string | null;
+    edition?: string | null;
+    excludeBookId?: string | mongoose.Types.ObjectId | null;
+  },
+) => {
+  if (!rawIsbn) {
+    return;
+  }
+
+  const isbn = rawIsbn.trim();
+  if (!isbn) {
+    return;
+  }
+
+  const filter: Record<string, unknown> = { isbn };
+  if (metadata.excludeBookId) {
+    filter._id = { $ne: new mongoose.Types.ObjectId(metadata.excludeBookId) };
+  }
+
+  const existingBook = await BookModel.findOne(filter).lean();
+  if (!existingBook) {
+    return;
+  }
+
+  // 1. Different Publisher -> Different ISBN
+  if (metadata.publisher && existingBook.publisher) {
+    const incomingPublisherId = metadata.publisher.toString();
+    const existingPublisherId = existingBook.publisher.toString();
+    if (incomingPublisherId !== existingPublisherId) {
+      throw new AppError(
+        `Per International ISBN standards, ISBN "${isbn}" is already registered to another publisher. A different publisher must assign their own ISBN.`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  }
+
+  // 2. Different Format (Paperback vs Hardcover vs eBook) -> Different ISBN
+  if (metadata.format && existingBook.format) {
+    const incomingFormat = metadata.format.toUpperCase();
+    const existingFormat = existingBook.format.toUpperCase();
+    if (incomingFormat !== existingFormat) {
+      throw new AppError(
+        `Per International ISBN standards, ISBN "${isbn}" is already registered as ${existingBook.format}. Different product formats (Paperback, Hardcover, eBook) must have separate ISBNs.`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  }
+
+  // 3. Different Language -> Different ISBN
+  if (metadata.language && existingBook.language) {
+    const incomingLanguage = metadata.language.trim().toLowerCase();
+    const existingLanguage = existingBook.language.trim().toLowerCase();
+    if (incomingLanguage && existingLanguage && incomingLanguage !== existingLanguage) {
+      throw new AppError(
+        `Per International ISBN standards, ISBN "${isbn}" is already registered in ${existingBook.language}. Each language edition must have its own ISBN.`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  }
+
+  // 4. Different Edition -> Different ISBN
+  if (metadata.edition && existingBook.edition) {
+    const incomingEdition = metadata.edition.trim().toLowerCase();
+    const existingEdition = existingBook.edition.trim().toLowerCase();
+    if (incomingEdition && existingEdition && incomingEdition !== existingEdition) {
+      throw new AppError(
+        `Per International ISBN standards, ISBN "${isbn}" is already registered as "${existingBook.edition}". A new edition requires its own ISBN.`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  }
 };
 
 export const createBookService = async (
@@ -406,13 +514,13 @@ export const createBookService = async (
     }
   }
 
-  // 4. Validate ISBN uniqueness if provided
-  if (input.isbn && input.isbn.trim()) {
-    const existingIsbn = await BookModel.findOne({ isbn: input.isbn.trim() }).lean();
-    if (existingIsbn) {
-      throw new AppError("A book with this ISBN already exists", HTTP_STATUS.CONFLICT);
-    }
-  }
+  // 4. Validate International ISBN Agency standards
+  await validateIsbnStandards(input.isbn, {
+    publisher: input.publisher,
+    format: input.format,
+    language: input.language,
+    edition: input.edition,
+  });
 
   // 4b. Validate legacyId uniqueness if provided
   if (input.legacyId && input.legacyId.trim()) {
@@ -565,17 +673,21 @@ export const updateBookService = async (
     book.country = new mongoose.Types.ObjectId(input.country);
   }
 
-  if (input.isbn && input.isbn.trim() !== book.isbn) {
-    const existingIsbn = await BookModel.findOne({
-      isbn: input.isbn.trim(),
-      _id: { $ne: book._id },
-    }).lean();
-    if (existingIsbn) {
-      throw new AppError("A book with this ISBN already exists", HTTP_STATUS.CONFLICT);
-    }
-    book.isbn = input.isbn.trim();
+  const resolvedIsbn = input.isbn !== undefined ? (input.isbn ? input.isbn.trim() : undefined) : book.isbn;
+  if (resolvedIsbn) {
+    await validateIsbnStandards(resolvedIsbn, {
+      publisher: input.publisher || book.publisher,
+      format: input.format || book.format,
+      language: input.language || book.language,
+      edition: input.edition !== undefined ? input.edition : book.edition,
+      excludeBookId: book._id,
+    });
   }
 
+  if (input.isbn !== undefined) {
+    book.isbn = input.isbn ? input.isbn.trim() : undefined;
+  }
+  //update book fields
   if (input.title !== undefined) book.title = input.title;
   if (input.titleBn !== undefined) book.titleBn = input.titleBn;
   if (input.description !== undefined) book.description = input.description;
@@ -621,6 +733,10 @@ export const updateBookService = async (
   return book;
 };
 
+/**
+ * @deprecated Auto-prefill by ISBN is deprecated. Book details should be entered manually
+ * because different publishers/editions have different ISBNs and metadata.
+ */
 export const lookupBookByIsbnService = async (
   isbn: string,
   sellerId?: string,

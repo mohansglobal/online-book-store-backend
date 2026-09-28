@@ -10,14 +10,18 @@ export const sellerDashboardRecentOrdersQuerySchema = z.object({
       "PENDING",
       "CONFIRMED",
       "PROCESSING",
+      "PARTIALLY_SHIPPED",
       "SHIPPED",
       "DELIVERED",
+      "PARTIALLY_CANCELLED",
       "CANCELLED",
       "pending",
       "confirmed",
       "processing",
+      "partially_shipped",
       "shipped",
       "delivered",
+      "partially_cancelled",
       "cancelled",
     ])
     .transform((val) => val.toUpperCase())

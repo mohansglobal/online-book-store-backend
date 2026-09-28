@@ -36,6 +36,7 @@ const wishlistSchema = new Schema(
 );
 
 wishlistSchema.index({ user: 1 }, { unique: true });
+wishlistSchema.index({ user: 1, "items.book": 1 });
 
 export type WishlistDocument = InferSchemaType<typeof wishlistSchema>;
 

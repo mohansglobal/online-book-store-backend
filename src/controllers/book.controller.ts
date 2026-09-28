@@ -25,7 +25,11 @@ export const getBooks = asyncHandler(async (req, res) => {
 });
 
 export const getBookByIdOrSlug = asyncHandler(async (req, res) => {
-  const book = await getBookByIdOrSlugService(req.params.idOrSlug as string);
+  const userId = req.user?.id;
+  const book = await getBookByIdOrSlugService(
+    req.params.idOrSlug as string,
+    userId,
+  );
 
   apiResponse(res, HTTP_STATUS.OK, "Book retrieved successfully", book);
 });

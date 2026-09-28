@@ -26,6 +26,7 @@ import type {
   VerifyPaymentInput,
   InitiateRazorpayOrderInput,
   CancelOrderInput,
+  UpdateOrderItemFulfillmentInput,
 } from "../validation/order.schema.js";
 
 const generateOrderNumber = (): string => {
@@ -393,24 +394,6 @@ export const createOrderService = async (
 
   const orderNumber = generateOrderNumber();
 
-  // Create Order items
-  const orderItems = acquiredItems.map((item) => {
-    const bookCover = item.book.coverImage?.trim();
-    const bookGalleryFirst = item.book.images?.[0]?.trim();
-    const bookCoverImage = bookCover || bookGalleryFirst || "";
-
-    return {
-      bookListing: item.listing._id,
-      book: item.book._id,
-      seller: item.listing.seller,
-      title: item.book.title,
-      coverImage: bookCoverImage,
-      priceInPaise: item.priceInPaise,
-      quantity: item.quantity,
-      subtotalInPaise: item.subtotalInPaise,
-    };
-  });
-
   const razorpayPaymentId = input.razorpayPaymentId || input.paymentId;
   const razorpayOrderId = input.razorpayOrderId;
   const razorpaySignature = input.razorpaySignature;
@@ -449,6 +432,34 @@ export const createOrderService = async (
       }
     }
   }
+
+  const initialItemStatus =
+    initialOrderStatus === "CONFIRMED" ? "CONFIRMED" : "PENDING";
+
+  // Create Order items with item-level status and delivery timeline
+  const orderItems = acquiredItems.map((item) => {
+    const bookCover = item.book.coverImage?.trim();
+    const bookGalleryFirst = item.book.images?.[0]?.trim();
+    const bookCoverImage = bookCover || bookGalleryFirst || "";
+
+    const estimatedDelivery = new Date();
+    estimatedDelivery.setDate(estimatedDelivery.getDate() + 4);
+
+    return {
+      _id: new mongoose.Types.ObjectId(),
+      bookListing: item.listing._id,
+      book: item.book._id,
+      seller: item.listing.seller,
+      title: item.book.title,
+      coverImage: bookCoverImage,
+      priceInPaise: item.priceInPaise,
+      quantity: item.quantity,
+      subtotalInPaise: item.subtotalInPaise,
+      status: initialItemStatus,
+      estimatedDeliveryDate: estimatedDelivery,
+      tracking: {},
+    };
+  });
 
   const newOrder = new OrderModel({
     orderNumber,
@@ -780,13 +791,6 @@ export const cancelOrderService = async (
     throw new AppError("This order has already been cancelled", HTTP_STATUS.BAD_REQUEST);
   }
 
-  if (order.orderStatus === "SHIPPED") {
-    throw new AppError(
-      "Orders that have already been shipped cannot be cancelled",
-      HTTP_STATUS.BAD_REQUEST,
-    );
-  }
-
   if (order.orderStatus === "DELIVERED") {
     throw new AppError(
       "Delivered orders cannot be cancelled",
@@ -794,23 +798,155 @@ export const cancelOrderService = async (
     );
   }
 
-  // Restore inventory stock atomically for each listing item
-  if (order.items && order.items.length > 0) {
+  const requestedItemIds = input.itemIds || [];
+  const hasSpecificItems = requestedItemIds.length > 0;
+
+  type OrderItemType = (typeof order.items)[number];
+  const itemsToCancel: OrderItemType[] = [];
+
+  if (hasSpecificItems) {
+    const requestedIdSet = new Set(
+      requestedItemIds.map((id) => id.toString().trim()),
+    );
+
     for (const item of order.items) {
-      await BookListingModel.findByIdAndUpdate(item.bookListing, {
-        $inc: { stock: item.quantity },
-      });
+      const subdocId = item._id ? item._id.toString() : "";
+      const listingId = item.bookListing ? item.bookListing.toString() : "";
+
+      const isRequested =
+        requestedIdSet.has(subdocId) || requestedIdSet.has(listingId);
+
+      if (isRequested) {
+        if (item.status === "CANCELLED") {
+          throw new AppError(
+            `Item "${item.title}" has already been cancelled`,
+            HTTP_STATUS.BAD_REQUEST,
+          );
+        }
+
+        if (item.status === "SHIPPED") {
+          throw new AppError(
+            `Item "${item.title}" has already been shipped and cannot be cancelled`,
+            HTTP_STATUS.BAD_REQUEST,
+          );
+        }
+
+        if (item.status === "DELIVERED") {
+          throw new AppError(
+            `Item "${item.title}" has already been delivered and cannot be cancelled`,
+            HTTP_STATUS.BAD_REQUEST,
+          );
+        }
+
+        itemsToCancel.push(item);
+      }
+    }
+
+    if (itemsToCancel.length === 0) {
+      throw new AppError(
+        "None of the specified items were found in this order",
+        HTTP_STATUS.NOT_FOUND,
+      );
+    }
+  } else {
+    // When no specific item IDs are passed, check if the entire order was already marked SHIPPED
+    if (order.orderStatus === "SHIPPED") {
+      throw new AppError(
+        "Orders that have already been shipped cannot be cancelled",
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+
+    // Cancel all items that are not yet shipped, delivered, or cancelled
+    for (const item of order.items) {
+      const isAlreadyCancelled = item.status === "CANCELLED";
+      const isShipped = item.status === "SHIPPED";
+      const isDelivered = item.status === "DELIVERED";
+
+      if (!isAlreadyCancelled && !isShipped && !isDelivered) {
+        itemsToCancel.push(item);
+      }
+    }
+
+    if (itemsToCancel.length === 0) {
+      const allShipped = order.items.every(
+        (i) => i.status === "SHIPPED" || i.status === "DELIVERED",
+      );
+      if (allShipped) {
+        throw new AppError(
+          "Orders that have already been shipped cannot be cancelled",
+          HTTP_STATUS.BAD_REQUEST,
+        );
+      }
+      throw new AppError(
+        "This order has no cancellable items remaining",
+        HTTP_STATUS.BAD_REQUEST,
+      );
     }
   }
 
-  // Update order status & refund tracking
-  order.orderStatus = "CANCELLED";
-  order.cancelledAt = new Date();
-  order.cancellationReason = input.reason || "Cancelled by user";
-  order.cancelledBy = new mongoose.Types.ObjectId(userContext.id);
+  // Restore inventory stock atomically for each cancelled item
+  for (const item of itemsToCancel) {
+    await BookListingModel.findByIdAndUpdate(item.bookListing, {
+      $inc: { stock: item.quantity },
+    });
+  }
+
+  const cancellationTimestamp = new Date();
+  const cancellationReasonText = input.reason || "Cancelled by user";
+
+  // Mark status and cancellation record on each cancelled item
+  for (const item of itemsToCancel) {
+    item.status = "CANCELLED";
+    item.cancellation = {
+      cancelledAt: cancellationTimestamp,
+      cancellationReason: cancellationReasonText,
+    };
+  }
+
+  // Calculate refund amount for cancelled items
+  let cancelledItemsSubtotal = 0;
+  for (const item of itemsToCancel) {
+    cancelledItemsSubtotal += item.subtotalInPaise;
+  }
 
   if (order.paymentStatus === "PAID") {
-    order.refundStatus = "PENDING";
+    const currentRefundAmount = order.refundAmountInPaise || 0;
+    order.refundAmountInPaise = currentRefundAmount + cancelledItemsSubtotal;
+  }
+
+  // Determine the new parent order status based on remaining items
+  const totalItemsCount = order.items.length;
+  let cancelledCount = 0;
+
+  for (const item of order.items) {
+    if (item.status === "CANCELLED") {
+      cancelledCount += 1;
+    }
+  }
+
+  const activeItemsRemaining = totalItemsCount - cancelledCount;
+
+  if (activeItemsRemaining === 0) {
+    // All items in the order are now cancelled
+    order.orderStatus = "CANCELLED";
+    order.cancelledAt = cancellationTimestamp;
+    order.cancellationReason = cancellationReasonText;
+    order.cancelledBy = new mongoose.Types.ObjectId(userContext.id);
+
+    if (order.paymentStatus === "PAID") {
+      order.refundStatus = "PENDING";
+    }
+  } else {
+    // Partial cancellation: some items cancelled, some remaining
+    order.orderStatus = "PARTIALLY_CANCELLED";
+    order.cancelledAt = cancellationTimestamp;
+    order.cancellationReason = cancellationReasonText;
+    order.cancelledBy = new mongoose.Types.ObjectId(userContext.id);
+
+    if (order.paymentStatus === "PAID") {
+      order.refundStatus = "PARTIALLY_REFUNDED";
+    }
   }
 
   await order.save();
@@ -822,11 +958,12 @@ export const cancelOrderService = async (
     {
       orderId: order._id,
       orderNumber: order.orderNumber,
-      cancelledBy: userContext.id,
-      paymentStatus: order.paymentStatus,
-      refundStatus: order.refundStatus,
+      cancelledItemsCount: itemsToCancel.length,
+      activeItemsRemaining,
+      orderStatus: order.orderStatus,
+      refundAmountInPaise: order.refundAmountInPaise,
     },
-    "Order cancelled and inventory restored successfully",
+    "Order items cancelled and stock restored successfully",
   );
 
   return order;
@@ -878,6 +1015,15 @@ export const verifyOrderPaymentService = async (
   if (razorpaySignature) order.razorpaySignature = razorpaySignature;
   order.paidAt = new Date();
 
+  // Confirm pending order items
+  if (order.items && order.items.length > 0) {
+    for (const item of order.items) {
+      if (item.status === "PENDING") {
+        item.status = "CONFIRMED";
+      }
+    }
+  }
+
   await order.save();
 
   // Trigger background order confirmation notifications once payment is verified
@@ -893,6 +1039,129 @@ export const verifyOrderPaymentService = async (
   );
 
   return order;
+};
+
+export const updateOrderItemFulfillmentService = async (
+  orderId: string,
+  itemId: string,
+  userContext: { id: string; role: string },
+  input: UpdateOrderItemFulfillmentInput,
+) => {
+  const order = await OrderModel.findById(orderId);
+
+  if (!order) {
+    throw new AppError("Order not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  // Find the target item by subdocument _id or bookListing ID
+  const item = order.items.find((i) => {
+    const subdocId = i._id ? i._id.toString() : "";
+    const listingId = i.bookListing ? i.bookListing.toString() : "";
+    return subdocId === itemId || listingId === itemId;
+  });
+
+  if (!item) {
+    throw new AppError("Item not found in order", HTTP_STATUS.NOT_FOUND);
+  }
+
+  // Authorization: must be the seller of this specific item or ADMIN
+  const itemSellerId = item.seller.toString();
+  const isItemSeller = itemSellerId === userContext.id;
+  const isAdmin = userContext.role === "ADMIN";
+
+  if (!isItemSeller && !isAdmin) {
+    throw new AppError(
+      "Forbidden: You do not have permission to update fulfillment for this seller's item",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  if (item.status === "CANCELLED") {
+    throw new AppError(
+      "Cannot update fulfillment for a cancelled item",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  // Update item tracking and delivery details
+  if (input.estimatedDeliveryDate) {
+    item.estimatedDeliveryDate = new Date(input.estimatedDeliveryDate);
+  }
+
+  if (!item.tracking) {
+    item.tracking = {};
+  }
+
+  if (input.courier) {
+    item.tracking.courier = input.courier;
+  }
+
+  if (input.trackingNumber) {
+    item.tracking.trackingNumber = input.trackingNumber;
+  }
+
+  if (input.trackingUrl !== undefined) {
+    item.tracking.trackingUrl = input.trackingUrl;
+  }
+
+  if (input.status) {
+    item.status = input.status;
+
+    if (input.status === "SHIPPED") {
+      item.tracking.shippedAt = new Date();
+    } else if (input.status === "DELIVERED") {
+      item.tracking.deliveredAt = new Date();
+    }
+  }
+
+  // Re-calculate aggregate orderStatus based on all active items
+  let activeItemsCount = 0;
+  let shippedItemsCount = 0;
+  let deliveredItemsCount = 0;
+  let processingItemsCount = 0;
+
+  for (const it of order.items) {
+    if (it.status !== "CANCELLED") {
+      activeItemsCount += 1;
+      if (it.status === "DELIVERED") {
+        deliveredItemsCount += 1;
+      } else if (it.status === "SHIPPED") {
+        shippedItemsCount += 1;
+      } else if (it.status === "PROCESSING") {
+        processingItemsCount += 1;
+      }
+    }
+  }
+
+  if (activeItemsCount > 0) {
+    if (deliveredItemsCount === activeItemsCount) {
+      order.orderStatus = "DELIVERED";
+    } else if (shippedItemsCount === activeItemsCount) {
+      order.orderStatus = "SHIPPED";
+    } else if (shippedItemsCount > 0 || deliveredItemsCount > 0) {
+      order.orderStatus = "PARTIALLY_SHIPPED";
+    } else if (processingItemsCount > 0) {
+      order.orderStatus = "PROCESSING";
+    }
+  }
+
+  await order.save();
+
+  logger.info(
+    {
+      orderId: order._id,
+      itemId,
+      sellerId: userContext.id,
+      itemStatus: item.status,
+      orderStatus: order.orderStatus,
+    },
+    "Order item fulfillment updated successfully",
+  );
+
+  return {
+    order,
+    updatedItem: item,
+  };
 };
 
 export const initiateRazorpayOrderService = async (

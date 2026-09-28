@@ -74,8 +74,6 @@ const bookSchema = new Schema(
     },
     isbn: {
       type: String,
-      unique: true,
-      sparse: true,
       trim: true,
     },
     description: {
@@ -146,7 +144,7 @@ const bookSchema = new Schema(
     },
     coverImage: {
       type: String,
-      required: true,
+      default: "",
       trim: true,
     },
     images: {
@@ -181,6 +179,7 @@ bookSchema.index({ publisher: 1 });
 bookSchema.index({ country: 1 });
 bookSchema.index({ createdBy: 1 });
 bookSchema.index({ status: 1 });
+bookSchema.index({ isbn: 1 }, { sparse: true });
 bookSchema.index({ legacyId: 1 }, { unique: true, sparse: true });
 bookSchema.index({ legacyBookId: 1 }, { sparse: true });
 bookSchema.index({ price: 1 });

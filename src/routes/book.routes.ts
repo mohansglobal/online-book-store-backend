@@ -32,7 +32,12 @@ router.get(
   validate(bookIsbnParamSchema, "params"),
   lookupBookByIsbn,
 );
-router.get("/:idOrSlug", validate(bookParamSchema, "params"), getBookByIdOrSlug);
+router.get(
+  "/:idOrSlug",
+  optionalAuthenticate,
+  validate(bookParamSchema, "params"),
+  getBookByIdOrSlug,
+);
 router.post(
   "/",
   authenticate,

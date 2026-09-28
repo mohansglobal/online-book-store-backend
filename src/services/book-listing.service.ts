@@ -2,17 +2,18 @@ import mongoose from "mongoose";
 
 import { BookListingModel, type BookListingDocument } from "../models/book-listing.model.js";
 import { BookModel, type BookDocument } from "../models/book.model.js";
+import { WishlistModel } from "../models/wishlist.model.js";
 import { UserModel } from "../models/user.model.js";
 import { CategoryModel } from "../models/category.model.js";
 import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CountryModel } from "../models/country.model.js";
-import { createBookService } from "./book.service.js";
 import {
   getBatchListingRatingStats,
   getListingRatingFromMap,
   calculateReviewStats,
 } from "./review.service.js";
+import { validateIsbnStandards } from "./book.service.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
@@ -31,6 +32,18 @@ import {
 import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
+
+const slugify = (text: string): string => {
+  return text
+    .toString()
+    .toLowerCase()
+    .trim()
+    .replace(/\s+/g, "-")
+    .replace(/[^\w\u0980-\u09FF-]+/g, "")
+    .replace(/--+/g, "-")
+    .replace(/^-+/, "")
+    .replace(/-+$/, "");
+};
 
 export const getBookListingsService = async (query: BookListingQueryInput) => {
   const filter: Record<string, unknown> = {};
@@ -390,7 +403,10 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   };
 };
 
-export const getBookListingByIdService = async (id: string) => {
+export const getBookListingByIdService = async (
+  id: string,
+  userId?: string,
+) => {
   if (!mongoose.Types.ObjectId.isValid(id)) {
     throw new AppError("Invalid listing ID", HTTP_STATUS.BAD_REQUEST);
   }
@@ -442,6 +458,20 @@ export const getBookListingByIdService = async (id: string) => {
     );
   }
 
+  let isWishlisted = false;
+
+  if (userId && mongoose.Types.ObjectId.isValid(userId) && bookId) {
+    const userObjectId = new mongoose.Types.ObjectId(userId);
+    const bookObjectId = new mongoose.Types.ObjectId(String(bookId));
+
+    const exists = await WishlistModel.exists({
+      user: userObjectId,
+      "items.book": bookObjectId,
+    });
+
+    isWishlisted = Boolean(exists);
+  }
+
   const mrpInPaise = listing.mrpInPaise ?? 0;
   const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
   const mrp = Math.round(mrpInPaise / 100);
@@ -453,6 +483,7 @@ export const getBookListingByIdService = async (id: string) => {
 
   return {
     ...listing,
+    isWishlisted,
     price,
     priceInPaise: sellingPriceInPaise,
     mrp,
@@ -496,86 +527,72 @@ export const createBookListingService = async (
     );
   }
 
-  // 2. Resolve Canonical Book: Look up existing or create canonical book
-  let targetBook: (BookDocument & { _id: mongoose.Types.ObjectId }) | null = null;
+  // 2. Resolve or create Book directly
+  let targetBookId: mongoose.Types.ObjectId | null = null;
 
   if (input.book && mongoose.Types.ObjectId.isValid(input.book)) {
-    targetBook = (await BookModel.findById(input.book)) as (BookDocument & {
-      _id: mongoose.Types.ObjectId;
-    }) | null;
-  } else if (input.isbn) {
-    targetBook = (await BookModel.findOne({ isbn: input.isbn })) as (BookDocument & {
-      _id: mongoose.Types.ObjectId;
-    }) | null;
+    targetBookId = new mongoose.Types.ObjectId(input.book);
   }
 
-  // If not found and canonical book fields are supplied, create the master book
-  if (!targetBook) {
-    if (
-      input.title &&
-      input.publisher &&
-      input.authors &&
-      input.categories &&
-      input.description &&
-      input.coverImage
-    ) {
-      const bookMrpInRupees = Math.round(input.mrpInPaise / 100);
-
-      targetBook = (await createBookService(
-        {
-          title: input.title,
-          titleBn: input.titleBn,
-          isbn: input.isbn,
-          publisher: input.publisher,
-          authors: input.authors,
-          categories: input.categories,
-          country: input.country,
-          language: input.language,
-          description: input.description,
-          coverImage: input.coverImage,
-          images: [],
-          pages: input.pages,
-          edition: input.edition,
-          searchTags: input.searchTags,
-          price: bookMrpInRupees,
-          priceIn: bookMrpInRupees,
-          mrp: bookMrpInRupees,
-          mrpInPaise: input.mrpInPaise,
-          sellingPriceInPaise: input.sellingPriceInPaise,
-        },
-        sellerId,
-      )) as BookDocument & { _id: mongoose.Types.ObjectId };
-    } else {
-      throw new AppError(
-        "Referenced canonical book not found. Please provide full book details to register a new book.",
-        HTTP_STATUS.NOT_FOUND,
-      );
+  if (!targetBookId) {
+    if (!input.title) {
+      throw new AppError("Book title is required", HTTP_STATUS.BAD_REQUEST);
     }
+
+    // Validate International ISBN Agency standards
+    await validateIsbnStandards(input.isbn, {
+      publisher: input.publisher,
+      format: input.format,
+      language: input.language,
+      edition: input.edition,
+    });
+
+    const baseSlug = slugify(input.title) || "-";
+    const uniqueSlug = `${baseSlug}-${Date.now().toString(36)}`;
+    const bookPrice = Math.round(input.mrpInPaise / 100);
+
+    const newBook = new BookModel({
+      title: input.title,
+      titleBn: input.titleBn,
+      slug: uniqueSlug,
+      isbn: input.isbn?.trim() || undefined,
+      publisher: input.publisher ? new mongoose.Types.ObjectId(input.publisher) : undefined,
+      authors: input.authors ? input.authors.map((id) => new mongoose.Types.ObjectId(id)) : [],
+      categories: input.categories ? input.categories.map((id) => new mongoose.Types.ObjectId(id)) : [],
+      country: input.country ? new mongoose.Types.ObjectId(input.country) : undefined,
+      language: input.language || "-",
+      description: input.description || "",
+      coverImage: input.coverImage || "",
+      images: input.images || [],
+      pages: input.pages,
+      edition: input.edition,
+      format: input.format || "PAPERBACK",
+      searchTags: input.searchTags || [],
+      price: bookPrice,
+      priceIn: bookPrice,
+      createdBy: new mongoose.Types.ObjectId(sellerId),
+    });
+
+    await newBook.save();
+    targetBookId = newBook._id as mongoose.Types.ObjectId;
   }
 
-  if (targetBook.status !== "ACTIVE") {
-    throw new AppError(
-      "Cannot create a listing for an inactive or draft book",
-      HTTP_STATUS.BAD_REQUEST,
-    );
-  }
-
-  // 3. Verify unique listing per seller + book
+  // 3. Prevent duplicate listing by same seller on the same book
   const existingListing = await BookListingModel.findOne({
-    book: targetBook._id,
-    seller: sellerId,
+    book: targetBookId,
+    seller: new mongoose.Types.ObjectId(sellerId),
   }).lean();
 
   if (existingListing) {
     throw new AppError(
-      "You already have a listing for this book. Update your existing listing instead.",
+      "You already have an active listing for this book. Update your existing listing instead.",
       HTTP_STATUS.CONFLICT,
     );
   }
 
-  // 4. Create listing
+  // 4. Create listing directly
   const newListing = new BookListingModel({
-    book: targetBook._id,
+    book: targetBookId,
     seller: new mongoose.Types.ObjectId(sellerId),
     mrpInPaise: input.mrpInPaise,
     sellingPriceInPaise: input.sellingPriceInPaise,
@@ -590,7 +607,7 @@ export const createBookListingService = async (
   logger.info(
     {
       listingId: newListing._id,
-      bookId: targetBook._id,
+      bookId: targetBookId,
       sellerId,
       sellingPriceInPaise: input.sellingPriceInPaise,
     },

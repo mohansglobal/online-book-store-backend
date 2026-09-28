@@ -1,7 +1,11 @@
 import { Router } from "express";
 
 import { validate } from "../middlewares/validate.middleware.js";
-import { authenticate, authorize } from "../middlewares/auth.middleware.js";
+import {
+  authenticate,
+  authorize,
+  optionalAuthenticate,
+} from "../middlewares/auth.middleware.js";
 import {
   bookListingQuerySchema,
   bookListingParamSchema,
@@ -38,6 +42,7 @@ router.get(
 
 router.get(
   "/:id",
+  optionalAuthenticate,
   validate(bookListingParamSchema, "params"),
   getBookListingById,
 );

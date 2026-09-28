@@ -340,8 +340,8 @@ export const createBookListingSchema = z
       isActive: data.isActive,
     };
   })
-  .refine((data) => data.book || data.isbn || data.title, {
-    message: "Either book ID, ISBN, or title must be provided to create a listing",
+  .refine((data) => data.book || data.title, {
+    message: "Either book ID or book title must be provided to create a listing",
     path: ["book"],
   })
   .refine((data) => data.sellingPriceInPaise <= data.mrpInPaise, {

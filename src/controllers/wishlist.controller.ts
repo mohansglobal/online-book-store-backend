@@ -3,6 +3,8 @@ import { apiResponse } from "../utils/api-response.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import {
   getWishlistService,
+  getWishlistBookIdsService,
+  checkBookInWishlistService,
   addToWishlistService,
   syncWishlistService,
   removeFromWishlistService,
@@ -16,6 +18,30 @@ import type {
 export const getWishlist = asyncHandler(async (req, res) => {
   const wishlist = await getWishlistService(req.user!.id);
   apiResponse(res, HTTP_STATUS.OK, "Wishlist retrieved successfully", wishlist);
+});
+
+export const getWishlistBookIds = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const bookIds = await getWishlistBookIdsService(userId);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Wishlist book IDs retrieved successfully",
+    bookIds,
+  );
+});
+
+export const checkBookWishlistStatus = asyncHandler(async (req, res) => {
+  const userId = req.user!.id;
+  const bookId = (req.params.bookId || req.params.id) as string;
+
+  const isWishlisted = await checkBookInWishlistService(userId, bookId);
+
+  apiResponse(res, HTTP_STATUS.OK, "Wishlist status checked successfully", {
+    bookId,
+    isWishlisted,
+  });
 });
 
 export const addToWishlist = asyncHandler(async (req, res) => {

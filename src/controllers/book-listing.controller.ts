@@ -53,7 +53,11 @@ export const getMyBookListings = asyncHandler(async (req, res) => {
 });
 
 export const getBookListingById = asyncHandler(async (req, res) => {
-  const listing = await getBookListingByIdService(req.params.id as string);
+  const userId = req.user?.id;
+  const listing = await getBookListingByIdService(
+    req.params.id as string,
+    userId,
+  );
 
   apiResponse(
     res,

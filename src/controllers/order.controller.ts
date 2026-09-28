@@ -9,6 +9,7 @@ import {
   verifyOrderPaymentService,
   initiateRazorpayOrderService,
   cancelOrderService,
+  updateOrderItemFulfillmentService,
 } from "../services/order.service.js";
 import type {
   CheckoutInput,
@@ -16,6 +17,7 @@ import type {
   VerifyPaymentInput,
   InitiateRazorpayOrderInput,
   CancelOrderInput,
+  UpdateOrderItemFulfillmentInput,
 } from "../validation/order.schema.js";
 
 export const createOrder = asyncHandler(async (req, res) => {
@@ -60,6 +62,41 @@ export const cancelOrder = asyncHandler(async (req, res) => {
     req.body as CancelOrderInput,
   );
   apiResponse(res, HTTP_STATUS.OK, "Order cancelled successfully", order);
+});
+
+export const cancelOrderItem = asyncHandler(async (req, res) => {
+  const orderId = req.params.id as string;
+  const itemId = req.params.itemId as string;
+  const reason = (req.body as { reason?: string })?.reason;
+
+  const order = await cancelOrderService(
+    orderId,
+    req.user!,
+    {
+      reason,
+      itemIds: [itemId],
+    },
+  );
+  apiResponse(res, HTTP_STATUS.OK, "Order item cancelled successfully", order);
+});
+
+export const updateOrderItemFulfillment = asyncHandler(async (req, res) => {
+  const orderId = req.params.id as string;
+  const itemId = req.params.itemId as string;
+  const input = req.body as UpdateOrderItemFulfillmentInput;
+
+  const result = await updateOrderItemFulfillmentService(
+    orderId,
+    itemId,
+    req.user!,
+    input,
+  );
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Order item fulfillment updated successfully",
+    result,
+  );
 });
 
 export const getMyOrders = asyncHandler(async (req, res) => {

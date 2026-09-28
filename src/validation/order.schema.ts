@@ -125,8 +125,26 @@ export type OrderParamInput = z.infer<typeof orderParamSchema>;
 
 export const cancelOrderSchema = z.object({
   reason: z.string().trim().max(500, "Reason cannot exceed 500 characters").optional(),
+  itemIds: z.array(z.string().trim().min(1)).optional(),
 });
 
 export type CancelOrderInput = z.infer<typeof cancelOrderSchema>;
+
+export const orderItemParamSchema = z.object({
+  id: z.string().trim().regex(objectIdRegex, "Invalid order ID format"),
+  itemId: z.string().trim().regex(objectIdRegex, "Invalid order item ID format"),
+});
+
+export type OrderItemParamInput = z.infer<typeof orderItemParamSchema>;
+
+export const updateOrderItemFulfillmentSchema = z.object({
+  status: z.enum(["CONFIRMED", "PROCESSING", "SHIPPED", "DELIVERED"]).optional(),
+  courier: z.string().trim().optional(),
+  trackingNumber: z.string().trim().optional(),
+  trackingUrl: z.string().trim().url("Invalid tracking URL format").optional().or(z.literal("")),
+  estimatedDeliveryDate: z.string().trim().optional(),
+});
+
+export type UpdateOrderItemFulfillmentInput = z.infer<typeof updateOrderItemFulfillmentSchema>;
 
 
