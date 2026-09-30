@@ -1,4 +1,5 @@
 import mongoose from "mongoose";
+import "../models/index.js";
 
 import { BookListingModel, type BookListingDocument } from "../models/book-listing.model.js";
 import { BookModel, type BookDocument } from "../models/book.model.js";
@@ -8,6 +9,8 @@ import { CategoryModel } from "../models/category.model.js";
 import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CountryModel } from "../models/country.model.js";
+import { OrderModel } from "../models/order.model.js";
+import { ReviewModel } from "../models/review.model.js";
 import {
   getBatchListingRatingStats,
   getListingRatingFromMap,
@@ -23,6 +26,8 @@ import {
   myBookListingQuerySchema,
   updateStockSchema,
   type BookListingQueryInput,
+  type BestsellerQueryInput,
+  type PopularNovelsQueryInput,
   type CreateBookListingInput,
   type UpdateBookListingInput,
   type MyBookListingQueryInput,
@@ -45,7 +50,763 @@ const slugify = (text: string): string => {
     .replace(/-+$/, "");
 };
 
+export const getThisWeekBestsellersService = async (
+  query: BestsellerQueryInput,
+) => {
+  const limit = query.limit && query.limit > 0 ? query.limit : 5;
+  const period = query.period || "week";
+
+  let startDate: Date | undefined;
+  if (period === "week") {
+    const sevenDaysInMs = 7 * 24 * 60 * 60 * 1000;
+    startDate = new Date(Date.now() - sevenDaysInMs);
+  } else if (period === "month") {
+    const thirtyDaysInMs = 30 * 24 * 60 * 60 * 1000;
+    startDate = new Date(Date.now() - thirtyDaysInMs);
+  }
+
+  const orderMatchStage: Record<string, unknown> = {
+    status: { $ne: "CANCELLED" },
+  };
+
+  if (startDate) {
+    orderMatchStage.createdAt = { $gte: startDate };
+  }
+
+  // 1. Aggregate top-selling books from non-cancelled orders
+  const topSoldBooks = await OrderModel.aggregate([
+    { $match: orderMatchStage },
+    { $unwind: "$items" },
+    { $match: { "items.status": { $ne: "CANCELLED" } } },
+    {
+      $group: {
+        _id: "$items.book",
+        totalSold: { $sum: "$items.quantity" },
+        orderCount: { $sum: 1 },
+      },
+    },
+    { $sort: { totalSold: -1, orderCount: -1 } },
+    { $limit: Math.max(limit * 3, 20) },
+  ]);
+
+  const salesMap = new Map<string, { totalSold: number; orderCount: number }>();
+  for (const item of topSoldBooks) {
+    const bookIdString = item._id.toString();
+    salesMap.set(bookIdString, {
+      totalSold: item.totalSold,
+      orderCount: item.orderCount,
+    });
+  }
+
+  const topBookIds = topSoldBooks.map((b) => b._id);
+
+  let rawListings: any[] = [];
+
+  if (topBookIds.length > 0) {
+    const matchedListings = await BookListingModel.aggregate([
+      {
+        $match: {
+          book: { $in: topBookIds },
+          isActive: true,
+        },
+      },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$bookDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          "bookDoc.status": "ACTIVE",
+        },
+      },
+      {
+        $sort: {
+          stock: -1,
+          sellingPriceInPaise: 1,
+          _id: 1,
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ["$bookDoc.title", "$book"] },
+          listing: { $first: "$$ROOT" },
+        },
+      },
+      { $replaceRoot: { newRoot: "$listing" } },
+      { $project: { bookDoc: 0 } },
+    ]);
+
+    matchedListings.sort((a, b) => {
+      const bookA = a.book?.toString() || "";
+      const bookB = b.book?.toString() || "";
+      const soldA = salesMap.get(bookA)?.totalSold ?? 0;
+      const soldB = salesMap.get(bookB)?.totalSold ?? 0;
+      return soldB - soldA;
+    });
+
+    rawListings = matchedListings;
+  }
+
+  // 2. Graceful backfill if fewer than limit bestsellers found in this period
+  if (rawListings.length < limit) {
+    const existingBookIds = rawListings.map((l) => l.book);
+    const needed = limit - rawListings.length;
+
+    const fallbackListings = await BookListingModel.aggregate([
+      {
+        $match: {
+          isActive: true,
+          book: { $nin: existingBookIds },
+        },
+      },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$bookDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          "bookDoc.status": "ACTIVE",
+        },
+      },
+      {
+        $sort: {
+          stock: -1,
+          sellingPriceInPaise: 1,
+          _id: 1,
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ["$bookDoc.title", "$book"] },
+          listing: { $first: "$$ROOT" },
+        },
+      },
+      { $replaceRoot: { newRoot: "$listing" } },
+      { $project: { bookDoc: 0 } },
+      { $limit: needed },
+    ]);
+
+    rawListings.push(...fallbackListings);
+  }
+
+  const selectedRawListings = rawListings.slice(0, limit);
+
+  // 3. Populate book and seller details
+  const populatedListings = await BookListingModel.populate(selectedRawListings, [
+    {
+      path: "book",
+      populate: [
+        { path: "authors", select: "name nameBn slug photo" },
+        { path: "publisher", select: "name nameBn slug logo" },
+        { path: "categories", select: "name nameBn slug" },
+        { path: "country", select: "name code phoneCode" },
+      ],
+    },
+    {
+      path: "seller",
+      select: "name email mobileNumber role profilePicture",
+    },
+  ]);
+
+  // 4. Batch compute seller book ratings in a single aggregation query
+  const itemsForRatings = populatedListings.map((listing) => ({
+    bookId: (listing.book as { _id?: unknown })?._id || listing.book,
+    sellerId: (listing.seller as { _id?: unknown })?._id || listing.seller,
+    listingId: listing._id,
+  }));
+
+  const ratingMap = await getBatchListingRatingStats(itemsForRatings);
+
+  const listings = populatedListings.map((listing) => {
+    const bookObj = listing.book as unknown as BookDocument;
+    const customImages = listing.listingImages ?? [];
+    const resolvedImages = getMergedAndShuffledBookImages(
+      bookObj?.coverImage,
+      bookObj?.images,
+      customImages,
+    );
+
+    const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
+    const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+    const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
+
+    const mrpInPaise = listing.mrpInPaise ?? 0;
+    const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
+    const mrp = Math.round(mrpInPaise / 100);
+    const price = Math.round(sellingPriceInPaise / 100);
+    const discountPercentage =
+      mrpInPaise > 0
+        ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
+        : 0;
+
+    const bookIdString = bookId?.toString() || "";
+    const salesInfo = salesMap.get(bookIdString);
+
+    const bookTitle = bookObj?.title || "";
+    const bookTitleBn = bookObj?.titleBn || "";
+
+    const authors = Array.isArray(bookObj?.authors) ? bookObj.authors : [];
+    const primaryAuthorObj = authors.length > 0 ? (authors[0] as { name?: string }) : undefined;
+    const authorName = primaryAuthorObj?.name || "";
+
+    const categories = Array.isArray(bookObj?.categories) ? bookObj.categories : [];
+    const primaryCategoryObj = categories.length > 0 ? (categories[0] as { name?: string }) : undefined;
+    const categoryName = primaryCategoryObj?.name || "";
+
+    const coverImageUrl = resolvedImages.coverImage || "";
+
+    const rawBook = listing.book;
+    const bookPlain =
+      typeof rawBook === "object" && rawBook !== null
+        ? "toObject" in rawBook && typeof (rawBook as { toObject?: () => Record<string, unknown> }).toObject === "function"
+          ? (rawBook as { toObject: () => Record<string, unknown> }).toObject()
+          : { ...(rawBook as unknown as Record<string, unknown>) }
+        : {};
+
+    const enrichedBook = {
+      ...bookPlain,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
+      author: authorName,
+      authorName,
+      authors,
+      category: categoryName,
+      categoryName,
+      categories,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
+      price,
+      rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+    };
+
+    return {
+      ...listing,
+      book: enrichedBook,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
+      author: authorName,
+      authorName,
+      authors,
+      category: categoryName,
+      categoryName,
+      categories,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
+      images: resolvedImages.images,
+      effectiveImages: resolvedImages.effectiveImages,
+      price,
+      priceInPaise: sellingPriceInPaise,
+      mrp,
+      mrpInPaise,
+      sellingPriceInPaise,
+      discountPercentage,
+      rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+      ratingCount: ratingInfo.ratingCount,
+      totalRatings: ratingInfo.totalRatings,
+      totalReviews: ratingInfo.totalReviews,
+      reviewCount: ratingInfo.reviewCount,
+      unitsSold: salesInfo?.totalSold ?? 0,
+      orderCount: salesInfo?.orderCount ?? 0,
+    };
+  });
+
+  return {
+    listings,
+    meta: {
+      page: 1,
+      limit,
+      total: listings.length,
+      totalPages: 1,
+      period,
+    },
+  };
+};
+
+export const getPopularNovelsService = async (
+  query: BookListingQueryInput,
+) => {
+  const limit = query.limit && query.limit > 0 ? query.limit : 8;
+
+  // Step 1: Resolve Novel Category ID
+  let targetCategoryId: mongoose.Types.ObjectId | undefined;
+
+  if (query.category) {
+    const rawCategory = Array.isArray(query.category)
+      ? query.category[0]
+      : query.category;
+
+    if (rawCategory && objectIdRegex.test(rawCategory)) {
+      targetCategoryId = new mongoose.Types.ObjectId(rawCategory);
+    }
+  }
+
+  if (!targetCategoryId) {
+    const novelCategory = await CategoryModel.findOne({
+      $or: [{ slug: "the-novel" }, { name: /novel/i }],
+      isActive: true,
+    })
+      .select("_id")
+      .lean();
+
+    if (novelCategory) {
+      targetCategoryId = novelCategory._id as mongoose.Types.ObjectId;
+    }
+  }
+
+  if (!targetCategoryId) {
+    return {
+      listings: [],
+      meta: {
+        page: 1,
+        limit,
+        total: 0,
+        totalPages: 1,
+        ispopularnovel: true,
+      },
+    };
+  }
+
+  // Step 2: Find all active books belonging to this novel category
+  const novelBooks = await BookModel.find({
+    categories: targetCategoryId,
+    status: "ACTIVE",
+  })
+    .select("_id title")
+    .lean();
+
+  if (novelBooks.length === 0) {
+    return {
+      listings: [],
+      meta: {
+        page: 1,
+        limit,
+        total: 0,
+        totalPages: 1,
+        ispopularnovel: true,
+      },
+    };
+  }
+
+  const novelBookIds = novelBooks.map((book) => book._id);
+
+  // Step 3: Aggregate non-cancelled orders for these novel books
+  const novelSales = await OrderModel.aggregate([
+    { $match: { status: { $ne: "CANCELLED" } } },
+    { $unwind: "$items" },
+    {
+      $match: {
+        "items.book": { $in: novelBookIds },
+        "items.status": { $ne: "CANCELLED" },
+      },
+    },
+    {
+      $group: {
+        _id: "$items.book",
+        totalSold: { $sum: "$items.quantity" },
+        orderCount: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const salesMap = new Map<string, { totalSold: number; orderCount: number }>();
+  for (const item of novelSales) {
+    const bookIdString = item._id.toString();
+    salesMap.set(bookIdString, {
+      totalSold: item.totalSold,
+      orderCount: item.orderCount,
+    });
+  }
+
+  // Step 4: Aggregate approved reviews for these novel books
+  const novelReviews = await ReviewModel.aggregate([
+    {
+      $match: {
+        book: { $in: novelBookIds },
+        status: "APPROVED",
+      },
+    },
+    {
+      $group: {
+        _id: "$book",
+        averageRating: { $avg: "$rating" },
+        reviewCount: { $sum: 1 },
+      },
+    },
+  ]);
+
+  const reviewsMap = new Map<string, { averageRating: number; reviewCount: number }>();
+  for (const rev of novelReviews) {
+    const bookIdString = rev._id.toString();
+    reviewsMap.set(bookIdString, {
+      averageRating: rev.averageRating || 0,
+      reviewCount: rev.reviewCount || 0,
+    });
+  }
+
+  // Step 5: Compute composite popularity score for each novel book
+  const scoredNovels: Array<{
+    bookId: mongoose.Types.ObjectId;
+    bookIdString: string;
+    totalSold: number;
+    orderCount: number;
+    averageRating: number;
+    reviewCount: number;
+    popularityScore: number;
+  }> = [];
+
+  for (const book of novelBooks) {
+    const bookIdString = book._id.toString();
+    const sales = salesMap.get(bookIdString);
+    const review = reviewsMap.get(bookIdString);
+
+    const totalSold = sales ? sales.totalSold : 0;
+    const orderCount = sales ? sales.orderCount : 0;
+    const rawAverageRating = review ? review.averageRating : 0;
+    const averageRating = Math.round(rawAverageRating * 10) / 10;
+    const reviewCount = review ? review.reviewCount : 0;
+
+    // Readable transparent popularity score:
+    // - Each unit sold adds 10 points
+    // - Each order adds 5 points
+    // - Star ratings weighted with review volume
+    const salesScore = (totalSold * 10) + (orderCount * 5);
+    const ratingScore = (averageRating * 4) + (reviewCount * 2);
+    const popularityScore = salesScore + ratingScore;
+
+    scoredNovels.push({
+      bookId: book._id as mongoose.Types.ObjectId,
+      bookIdString,
+      totalSold,
+      orderCount,
+      averageRating,
+      reviewCount,
+      popularityScore,
+    });
+  }
+
+  // Sort novels: highest popularity score first, then sales, then ratings
+  scoredNovels.sort((a, b) => {
+    if (b.popularityScore !== a.popularityScore) {
+      return b.popularityScore - a.popularityScore;
+    }
+    if (b.totalSold !== a.totalSold) {
+      return b.totalSold - a.totalSold;
+    }
+    return b.averageRating - a.averageRating;
+  });
+
+  const popularBookIds = scoredNovels.map((item) => item.bookId);
+
+  // Step 6: Match active listings for the popular novel books
+  // Deduplicate by distinct book title, prioritizing in-stock and best selling price
+  const matchedListings = await BookListingModel.aggregate([
+    {
+      $match: {
+        book: { $in: popularBookIds },
+        isActive: true,
+      },
+    },
+    {
+      $lookup: {
+        from: "books",
+        localField: "book",
+        foreignField: "_id",
+        as: "bookDoc",
+      },
+    },
+    {
+      $unwind: {
+        path: "$bookDoc",
+        preserveNullAndEmptyArrays: true,
+      },
+    },
+    {
+      $match: {
+        "bookDoc.status": "ACTIVE",
+      },
+    },
+    {
+      $sort: {
+        stock: -1,
+        sellingPriceInPaise: 1,
+        _id: 1,
+      },
+    },
+    {
+      $group: {
+        _id: { $ifNull: ["$bookDoc.title", "$book"] },
+        listing: { $first: "$$ROOT" },
+      },
+    },
+    { $replaceRoot: { newRoot: "$listing" } },
+    { $project: { bookDoc: 0 } },
+  ]);
+
+  // Order matched listings to follow the exact popular ranking
+  const rankMap = new Map<string, number>();
+  for (let i = 0; i < scoredNovels.length; i++) {
+    rankMap.set(scoredNovels[i].bookIdString, i);
+  }
+
+  matchedListings.sort((a, b) => {
+    const bookA = a.book ? a.book.toString() : "";
+    const bookB = b.book ? b.book.toString() : "";
+    const rankA = rankMap.has(bookA) ? rankMap.get(bookA)! : 9999;
+    const rankB = rankMap.has(bookB) ? rankMap.get(bookB)! : 9999;
+    return rankA - rankB;
+  });
+
+  let rawListings = matchedListings;
+
+  // Step 7: Graceful backfill if fewer than limit (e.g. 8) distinct novel listings
+  if (rawListings.length < limit) {
+    const existingBookIds = rawListings.map((l) => l.book);
+    const needed = limit - rawListings.length;
+
+    const fallbackListings = await BookListingModel.aggregate([
+      {
+        $match: {
+          isActive: true,
+          book: { $nin: existingBookIds },
+        },
+      },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$bookDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $match: {
+          "bookDoc.categories": targetCategoryId,
+          "bookDoc.status": "ACTIVE",
+        },
+      },
+      {
+        $sort: {
+          stock: -1,
+          sellingPriceInPaise: 1,
+          _id: 1,
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ["$bookDoc.title", "$book"] },
+          listing: { $first: "$$ROOT" },
+        },
+      },
+      { $replaceRoot: { newRoot: "$listing" } },
+      { $project: { bookDoc: 0 } },
+      { $limit: needed },
+    ]);
+
+    rawListings.push(...fallbackListings);
+  }
+
+  const selectedRawListings = rawListings.slice(0, limit);
+
+  // Step 8: Populate canonical book details and seller details
+  const populatedListings = await BookListingModel.populate(selectedRawListings, [
+    {
+      path: "book",
+      populate: [
+        { path: "authors", select: "name nameBn slug photo" },
+        { path: "publisher", select: "name nameBn slug logo" },
+        { path: "categories", select: "name nameBn slug" },
+        { path: "country", select: "name code phoneCode" },
+      ],
+    },
+    {
+      path: "seller",
+      select: "name email mobileNumber role profilePicture",
+    },
+  ]);
+
+  // Step 9: Batch compute ratings for seller listings
+  const itemsForRatings = populatedListings.map((listing) => ({
+    bookId: (listing.book as { _id?: unknown })?._id || listing.book,
+    sellerId: (listing.seller as { _id?: unknown })?._id || listing.seller,
+    listingId: listing._id,
+  }));
+
+  const ratingMap = await getBatchListingRatingStats(itemsForRatings);
+
+  // Step 10: Map listings into buyer-facing cards with all required fields
+  const scoresByBookId = new Map<string, { totalSold: number; orderCount: number; popularityScore: number }>();
+  for (const s of scoredNovels) {
+    scoresByBookId.set(s.bookIdString, {
+      totalSold: s.totalSold,
+      orderCount: s.orderCount,
+      popularityScore: s.popularityScore,
+    });
+  }
+
+  const listings = populatedListings.map((listing) => {
+    const bookObj = listing.book as unknown as BookDocument;
+    const customImages = listing.listingImages ?? [];
+    const resolvedImages = getMergedAndShuffledBookImages(
+      bookObj?.coverImage,
+      bookObj?.images,
+      customImages,
+    );
+
+    const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
+    const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
+    const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
+
+    const mrpInPaise = listing.mrpInPaise ?? 0;
+    const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
+    const mrp = Math.round(mrpInPaise / 100);
+    const price = Math.round(sellingPriceInPaise / 100);
+    const discountPercentage =
+      mrpInPaise > 0
+        ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
+        : 0;
+
+    const bookIdString = bookId ? bookId.toString() : "";
+    const scoreData = scoresByBookId.get(bookIdString);
+
+    const bookTitle = bookObj?.title || "";
+    const bookTitleBn = bookObj?.titleBn || "";
+
+    const authors = Array.isArray(bookObj?.authors) ? bookObj.authors : [];
+    const primaryAuthorObj = authors.length > 0 ? (authors[0] as { name?: string }) : undefined;
+    const authorName = primaryAuthorObj?.name || "";
+
+    const categories = Array.isArray(bookObj?.categories) ? bookObj.categories : [];
+    const primaryCategoryObj = categories.length > 0 ? (categories[0] as { name?: string }) : undefined;
+    const categoryName = primaryCategoryObj?.name || "";
+
+    const coverImageUrl = resolvedImages.coverImage || "";
+
+    const rawBook = listing.book;
+    const bookPlain =
+      typeof rawBook === "object" && rawBook !== null
+        ? "toObject" in rawBook && typeof (rawBook as { toObject?: () => Record<string, unknown> }).toObject === "function"
+          ? (rawBook as { toObject: () => Record<string, unknown> }).toObject()
+          : { ...(rawBook as unknown as Record<string, unknown>) }
+        : {};
+
+    const enrichedBook = {
+      ...bookPlain,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
+      author: authorName,
+      authorName,
+      authors,
+      category: categoryName,
+      categoryName,
+      categories,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
+      price,
+      rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+    };
+
+    return {
+      ...listing,
+      book: enrichedBook,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
+      author: authorName,
+      authorName,
+      authors,
+      category: categoryName,
+      categoryName,
+      categories,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
+      images: resolvedImages.images,
+      effectiveImages: resolvedImages.effectiveImages,
+      price,
+      priceInPaise: sellingPriceInPaise,
+      mrp,
+      mrpInPaise,
+      sellingPriceInPaise,
+      discountPercentage,
+      rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+      ratingCount: ratingInfo.ratingCount,
+      totalRatings: ratingInfo.totalRatings,
+      totalReviews: ratingInfo.totalReviews,
+      reviewCount: ratingInfo.reviewCount,
+      unitsSold: scoreData?.totalSold ?? 0,
+      orderCount: scoreData?.orderCount ?? 0,
+      popularityScore: scoreData?.popularityScore ?? 0,
+    };
+  });
+
+  return {
+    listings,
+    meta: {
+      page: 1,
+      limit,
+      total: listings.length,
+      totalPages: 1,
+      ispopularnovel: true,
+    },
+  };
+};
+
 export const getBookListingsService = async (query: BookListingQueryInput) => {
+  if (query.bestsellers) {
+    return getThisWeekBestsellersService({
+      limit: query.limit,
+      period: query.period || "week",
+    });
+  }
+
+  if (query.ispopularnovel) {
+    return getPopularNovelsService(query);
+  }
+
   const filter: Record<string, unknown> = {};
 
   if (query.isActive !== undefined) {
@@ -208,37 +969,120 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   const isTitleSort = query.sortBy === "title";
   const sortField = isTitleSort ? "bookDoc.title" : query.sortBy;
 
-  if (query.homesection) {
+  const shouldShuffleHomepage = query.homepage && !query.hasExplicitSort;
+
+  if (shouldShuffleHomepage) {
     const aggregatePipeline: any[] = [
       { $match: filter },
-      ...(isTitleSort
-        ? [
-            {
-              $lookup: {
-                from: "books",
-                localField: "book",
-                foreignField: "_id",
-                as: "bookDoc",
-              },
-            },
-            {
-              $unwind: {
-                path: "$bookDoc",
-                preserveNullAndEmptyArrays: true,
-              },
-            },
-          ]
-        : []),
-      { $sort: { [sortField]: sortDir, _id: 1 } },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$bookDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $sort: {
+          stock: -1,
+          sellingPriceInPaise: 1,
+          _id: 1,
+        },
+      },
       {
         $group: {
-          _id: "$book",
+          _id: { $ifNull: ["$bookDoc.title", "$book"] },
+          listing: { $first: "$$ROOT" },
+        },
+      },
+      { $replaceRoot: { newRoot: "$listing" } },
+      { $project: { bookDoc: 0 } },
+      { $sample: { size: limit } },
+    ];
+
+    const [aggregatedListings, totalCountResult] = await Promise.all([
+      BookListingModel.aggregate(aggregatePipeline),
+      BookListingModel.aggregate([
+        { $match: filter },
+        {
+          $lookup: {
+            from: "books",
+            localField: "book",
+            foreignField: "_id",
+            as: "bookDoc",
+          },
+        },
+        {
+          $unwind: {
+            path: "$bookDoc",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $group: {
+            _id: { $ifNull: ["$bookDoc.title", "$book"] },
+          },
+        },
+        { $count: "total" },
+      ]),
+    ]);
+
+    rawListings = await BookListingModel.populate(aggregatedListings, [
+      {
+        path: "book",
+        populate: [
+          { path: "authors", select: "name nameBn slug photo" },
+          { path: "publisher", select: "name nameBn slug logo" },
+          { path: "categories", select: "name nameBn slug" },
+          { path: "country", select: "name code phoneCode" },
+        ],
+      },
+      {
+        path: "seller",
+        select: "name email mobileNumber role profilePicture",
+      },
+    ]);
+
+    total = totalCountResult[0]?.total ?? 0;
+  } else if (query.homesection) {
+    const aggregatePipeline: any[] = [
+      { $match: filter },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      {
+        $unwind: {
+          path: "$bookDoc",
+          preserveNullAndEmptyArrays: true,
+        },
+      },
+      {
+        $sort: {
+          stock: -1,
+          [sortField]: sortDir,
+          _id: 1,
+        },
+      },
+      {
+        $group: {
+          _id: { $ifNull: ["$bookDoc.title", "$book"] },
           listing: { $first: "$$ROOT" },
         },
       },
       { $replaceRoot: { newRoot: "$listing" } },
       { $sort: { [sortField]: sortDir, _id: 1 } },
-      ...(isTitleSort ? [{ $project: { bookDoc: 0 } }] : []),
+      { $project: { bookDoc: 0 } },
     ];
 
     const [aggregatedListings, totalCountResult] = await Promise.all([
@@ -249,7 +1093,25 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
       ]),
       BookListingModel.aggregate([
         { $match: filter },
-        { $group: { _id: "$book" } },
+        {
+          $lookup: {
+            from: "books",
+            localField: "book",
+            foreignField: "_id",
+            as: "bookDoc",
+          },
+        },
+        {
+          $unwind: {
+            path: "$bookDoc",
+            preserveNullAndEmptyArrays: true,
+          },
+        },
+        {
+          $group: {
+            _id: { $ifNull: ["$bookDoc.title", "$book"] },
+          },
+        },
         { $count: "total" },
       ]),
     ]);
@@ -370,18 +1232,74 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
         ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
         : 0;
 
+    const bookTitle = bookObj?.title || "";
+    const bookTitleBn = bookObj?.titleBn || "";
+
+    const authors = Array.isArray(bookObj?.authors) ? bookObj.authors : [];
+    const primaryAuthorObj = authors.length > 0 ? (authors[0] as { name?: string }) : undefined;
+    const authorName = primaryAuthorObj?.name || "";
+
+    const categories = Array.isArray(bookObj?.categories) ? bookObj.categories : [];
+    const primaryCategoryObj = categories.length > 0 ? (categories[0] as { name?: string }) : undefined;
+    const categoryName = primaryCategoryObj?.name || "";
+
+    const coverImageUrl = resolvedImages.coverImage || "";
+
+    const rawBook = listing.book;
+    const bookPlain =
+      typeof rawBook === "object" && rawBook !== null
+        ? "toObject" in rawBook && typeof (rawBook as { toObject?: () => Record<string, unknown> }).toObject === "function"
+          ? (rawBook as { toObject: () => Record<string, unknown> }).toObject()
+          : { ...(rawBook as unknown as Record<string, unknown>) }
+        : {};
+
+    const enrichedBook = {
+      ...bookPlain,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
+      author: authorName,
+      authorName,
+      authors,
+      category: categoryName,
+      categoryName,
+      categories,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
+      price,
+      rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
+      averageRating: ratingInfo.averageRating,
+    };
+
     return {
       ...listing,
+      book: enrichedBook,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
+      author: authorName,
+      authorName,
+      authors,
+      category: categoryName,
+      categoryName,
+      categories,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
+      images: resolvedImages.images,
+      effectiveImages: resolvedImages.effectiveImages,
       price,
       priceInPaise: sellingPriceInPaise,
       mrp,
       mrpInPaise,
       sellingPriceInPaise,
       discountPercentage,
-      coverImage: resolvedImages.coverImage,
-      images: resolvedImages.images,
-      effectiveImages: resolvedImages.effectiveImages,
       rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
       averageRating: ratingInfo.averageRating,
       ratingCount: ratingInfo.ratingCount,
       totalRatings: ratingInfo.totalRatings,

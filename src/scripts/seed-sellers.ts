@@ -10,7 +10,7 @@ const seedSellers = async () => {
     logger.info("Connecting to MongoDB for seller seeding...");
     await mongoose.connect(env.MONGODB_URI);
     logger.info("MongoDB connected successfully");
-
+      
     // 1. Ensure Country exists
     let india = await CountryModel.findOne({ code: "IN" });
     if (!india) {
@@ -25,7 +25,7 @@ const seedSellers = async () => {
     }
 
     const defaultPassword = await bcrypt.hash("Password123!", 10);
-
+    
     // 2. Define sellers to ensure exist
     const sellersToSeed = [
       {
@@ -53,7 +53,7 @@ const seedSellers = async () => {
         isActive: true,
       },
     ];
-
+    
     const availableSellers: mongoose.Types.ObjectId[] = [];
 
     for (const sellerData of sellersToSeed) {
@@ -144,7 +144,7 @@ const seedSellers = async () => {
       },
       "Seller seeding and listing reconnection completed successfully!",
     );
-
+    
     console.log("\n========================================================");
     console.log("              SELLER SEEDING COMPLETE");
     console.log("========================================================");

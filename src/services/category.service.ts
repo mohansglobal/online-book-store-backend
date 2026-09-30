@@ -1,4 +1,7 @@
+import mongoose from "mongoose";
 import { CategoryModel } from "../models/category.model.js";
+import { BookModel } from "../models/book.model.js";
+import { BookListingModel } from "../models/book-listing.model.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import type { CategoryQueryInput } from "../validation/category.schema.js";
@@ -20,12 +23,22 @@ export const getCategoriesService = async (query: CategoryQueryInput) => {
     ];
   }
 
+  if (query.hasBooks) {
+    const activeBookIds = await BookListingModel.find({ isActive: true }).distinct("book");
+    const categoriesWithListings = await BookModel.find({
+      _id: { $in: activeBookIds },
+      status: "ACTIVE",
+    }).distinct("categories");
+    filter._id = { ...((filter._id as object) || {}), $in: categoriesWithListings };
+  }
+
   const page = query.page ?? 1;
   const limit = query.limit;
   const isUnlimited = limit === undefined || limit === 0;
 
+  const sortDirection = query.sortOrder === "asc" ? 1 : -1;
   let queryBuilder = CategoryModel.find(filter).sort({
-    [query.sortBy]: query.sortOrder === "asc" ? 1 : -1,
+    [query.sortBy]: sortDirection,
   });
 
   if (!isUnlimited) {
@@ -38,10 +51,52 @@ export const getCategoriesService = async (query: CategoryQueryInput) => {
     CategoryModel.countDocuments(filter),
   ]);
 
+  // Fetch book listing counts for the retrieved categories from BookListing table
+  const categoryIds = categories.map((c) => c._id);
+  let countMap = new Map<string, number>();
+
+  if (categoryIds.length > 0) {
+    const listingCounts = await BookListingModel.aggregate([
+      { $match: { isActive: true } },
+      {
+        $lookup: {
+          from: "books",
+          localField: "book",
+          foreignField: "_id",
+          as: "bookDoc",
+        },
+      },
+      { $unwind: "$bookDoc" },
+      {
+        $match: {
+          "bookDoc.status": "ACTIVE",
+          "bookDoc.categories": { $in: categoryIds },
+        },
+      },
+      { $unwind: "$bookDoc.categories" },
+      { $match: { "bookDoc.categories": { $in: categoryIds } } },
+      {
+        $group: {
+          _id: "$bookDoc.categories",
+          count: { $sum: 1 },
+        },
+      },
+    ]);
+
+    countMap = new Map(
+      listingCounts.map((b) => [b._id.toString(), b.count]),
+    );
+  }
+
+  const categoriesWithCount = categories.map((c) => ({
+    ...c,
+    bookCount: countMap.get(c._id.toString()) || 0,
+  }));
+
   const totalPages = isUnlimited ? 1 : Math.ceil(total / limit) || 1;
 
   return {
-    categories,
+    categories: categoriesWithCount,
     meta: {
       page: isUnlimited ? 1 : page,
       limit: isUnlimited ? total : limit,

@@ -3,6 +3,8 @@ import { apiResponse } from "../utils/api-response.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import {
   getBookListingsService,
+  getThisWeekBestsellersService,
+  getPopularNovelsService,
   getBookListingByIdService,
   createBookListingService,
   updateBookListingService,
@@ -14,6 +16,8 @@ import {
 } from "../services/book-listing.service.js";
 import type {
   BookListingQueryInput,
+  BestsellerQueryInput,
+  PopularNovelsQueryInput,
   CreateBookListingInput,
   UpdateBookListingInput,
   MyBookListingQueryInput,
@@ -21,6 +25,34 @@ import type {
   ToggleBookListingStatusInput,
   ApplyListingDiscountInput,
 } from "../validation/book-listing.schema.js";
+
+export const getPopularNovels = asyncHandler(async (req, res) => {
+  const { listings, meta } = await getPopularNovelsService(
+    req.query as unknown as BookListingQueryInput,
+  );
+  
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Popular novels retrieved successfully",
+    listings,
+    meta,
+  );
+});
+
+export const getThisWeekBestsellers = asyncHandler(async (req, res) => {
+  const { listings, meta } = await getThisWeekBestsellersService(
+    req.query as unknown as BestsellerQueryInput,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "This week's best sellers retrieved successfully",
+    listings,
+    meta,
+  );
+});
 
 export const getBookListings = asyncHandler(async (req, res) => {
   const { listings, meta } = await getBookListingsService(

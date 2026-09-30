@@ -10,6 +10,7 @@ import type {
   OrderConfirmationEmailJobPayload,
   SellerNewOrderAlertJobPayload,
   OrderCancellationEmailJobPayload,
+  OrderStatusUpdateEmailJobPayload,
 } from "../types/queue.types.js";
 
 /**
@@ -154,3 +155,30 @@ export const dispatchOrderCancellationJob = async (
 
   return job;
 };
+
+/**
+ * Dispatches an Order Status Update email job to the background queue.
+ */
+export const dispatchOrderStatusUpdateJob = async (
+  payload: OrderStatusUpdateEmailJobPayload,
+  customOptions?: JobsOptions,
+) => {
+  const job = await emailQueue.add(
+    EMAIL_JOB_NAMES.SEND_ORDER_STATUS_UPDATE,
+    payload,
+    customOptions,
+  );
+
+  logger.info(
+    {
+      jobId: job.id,
+      orderNumber: payload.orderNumber,
+      recipientEmail: payload.toEmail,
+      newStatus: payload.newStatus,
+    },
+    "Dispatched order status update email job to queue",
+  );
+
+  return job;
+};
+

@@ -8,6 +8,10 @@ export const categoryQuerySchema = z.object({
     .enum(["true", "false"])
     .transform((val) => val === "true")
     .optional(),
+  hasBooks: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((val) => val === true || val === "true")
+    .optional(),
   sortBy: z.enum(["name", "createdAt"]).default("name"),
   sortOrder: z.enum(["asc", "desc"]).default("asc"),
 });

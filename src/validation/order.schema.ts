@@ -147,4 +147,35 @@ export const updateOrderItemFulfillmentSchema = z.object({
 
 export type UpdateOrderItemFulfillmentInput = z.infer<typeof updateOrderItemFulfillmentSchema>;
 
+export const updateSellerOrderStatusSchema = z.object({
+  status: z.enum([
+    "CONFIRMED",
+    "PROCESSING",
+    "SHIPPED",
+    "DELIVERED",
+    "CANCELLED",
+  ]),
+  itemId: z
+    .string()
+    .trim()
+    .regex(objectIdRegex, "Invalid item ID format")
+    .optional(),
+  courier: z.string().trim().max(100).optional(),
+  trackingNumber: z.string().trim().max(100).optional(),
+  trackingUrl: z
+    .string()
+    .trim()
+    .url("Invalid tracking URL format")
+    .optional()
+    .or(z.literal("")),
+  estimatedDeliveryDate: z.string().trim().optional(),
+  cancellationReason: z.string().trim().max(500).optional(),
+  message: z.string().trim().max(500).optional(),
+});
+
+export type UpdateSellerOrderStatusInput = z.infer<
+  typeof updateSellerOrderStatusSchema
+>;
+
+
 

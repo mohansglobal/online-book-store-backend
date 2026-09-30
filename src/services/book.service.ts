@@ -206,25 +206,45 @@ export const getBooksService = async (query: BookQueryInput) => {
     const bookId = bookObj?._id || listing.book;
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
+    const bookTitle = bookObj?.title || "";
+    const bookTitleBn = bookObj?.titleBn || "";
+
+    const authors = Array.isArray(bookObj?.authors) ? bookObj.authors : [];
+    const primaryAuthorObj = authors.length > 0 ? (authors[0] as { name?: string }) : undefined;
+    const authorName = primaryAuthorObj?.name || "";
+
+    const categories = Array.isArray(bookObj?.categories) ? bookObj.categories : [];
+    const primaryCategoryObj = categories.length > 0 ? (categories[0] as { name?: string }) : undefined;
+    const categoryName = primaryCategoryObj?.name || "";
+
+    const coverImageUrl = resolvedImages.coverImage || "";
 
     return {
       _id: listing._id,
       listingId: listing._id,
       bookId: bookObj?._id,
-      title: bookObj?.title,
-      titleBn: bookObj?.titleBn,
+      name: bookTitle,
+      title: bookTitle,
+      titleBn: bookTitleBn,
       slug: bookObj?.slug,
       isbn: bookObj?.isbn,
       description: bookObj?.description,
+      author: authorName,
+      authorName,
       authors: bookObj?.authors,
       publisher: bookObj?.publisher,
+      category: categoryName,
+      categoryName,
       categories: bookObj?.categories,
       country: bookObj?.country,
       language: bookObj?.language,
       format: bookObj?.format,
       pages: bookObj?.pages,
       edition: bookObj?.edition,
-      coverImage: resolvedImages.coverImage,
+      bookcover: coverImageUrl,
+      bookCover: coverImageUrl,
+      coverImage: coverImageUrl,
+      image: coverImageUrl,
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
       listingImages: customImages,
@@ -244,6 +264,7 @@ export const getBooksService = async (query: BookQueryInput) => {
       sku: listing.sku,
       seller: listing.seller,
       rating: ratingInfo.rating,
+      ratings: ratingInfo.rating,
       averageRating: ratingInfo.averageRating,
       ratingCount: ratingInfo.ratingCount,
       totalRatings: ratingInfo.totalRatings,

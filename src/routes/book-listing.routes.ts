@@ -8,6 +8,8 @@ import {
 } from "../middlewares/auth.middleware.js";
 import {
   bookListingQuerySchema,
+  bestsellerQuerySchema,
+  popularNovelsQuerySchema,
   bookListingParamSchema,
   createBookListingSchema,
   updateBookListingSchema,
@@ -18,6 +20,8 @@ import {
 } from "../validation/book-listing.schema.js";
 import {
   getBookListings,
+  getThisWeekBestsellers,
+  getPopularNovels,
   getMyBookListings,
   getBookListingById,
   createBookListing,
@@ -31,6 +35,18 @@ import {
 const router = Router();
 
 router.get("/", validate(bookListingQuerySchema, "query"), getBookListings);
+
+router.get(
+  "/bestsellers",
+  validate(bestsellerQuerySchema, "query"),
+  getThisWeekBestsellers,
+);
+
+router.get(
+  "/popular-novels",
+  validate(popularNovelsQuerySchema, "query"),
+  getPopularNovels,
+);
 
 router.get(
   "/my-listings",

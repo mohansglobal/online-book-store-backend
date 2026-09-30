@@ -26,6 +26,11 @@ export const getPublishersService = async (query: PublisherQueryInput) => {
     filter.isActive = query.isActive;
   }
 
+  if (query.letter && query.letter !== "All") {
+    const escapedLetter = query.letter.trim().replace(/[-/\\^$*+?.()|[\]{}]/g, (c) => '\\' + c);
+    filter.name = { $regex: new RegExp("^" + escapedLetter, "i") };
+  }
+
   if (query.search) {
     const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const searchRegex = new RegExp(escapedSearch, "i");
@@ -41,8 +46,18 @@ export const getPublishersService = async (query: PublisherQueryInput) => {
   const limit = query.limit;
   const isUnlimited = limit === undefined || limit === 0;
 
-  let queryBuilder = PublisherModel.find(filter).sort({
-    [query.sortBy]: query.sortOrder === "asc" ? 1 : -1,
+  const rawSortBy = query.sortBy as string | undefined;
+  const sortBy = rawSortBy === "title" ? "name" : (query.sortBy || "name");
+  const sortDirection = query.sortOrder === "asc" ? 1 : -1;
+  
+  let queryBuilder = PublisherModel.find(filter).select("-__v");
+
+  if (sortBy === "name") {
+    queryBuilder = queryBuilder.collation({ locale: "en", strength: 2 });
+  }
+
+  queryBuilder = queryBuilder.sort({
+    [sortBy]: sortDirection,
   });
 
   if (!isUnlimited) {

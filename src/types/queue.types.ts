@@ -68,10 +68,36 @@ export interface OrderCancellationEmailJobPayload {
   totalAmountInPaise: number;
 }
 
+export interface OrderStatusUpdateItemDetail {
+  title: string;
+  quantity: number;
+  status: string;
+}
+
+export interface OrderStatusUpdateEmailJobPayload {
+  toEmail: string;
+  buyerName: string;
+  orderNumber: string;
+  orderId: string;
+  previousStatus?: string;
+  newStatus: string;
+  statusMessage?: string;
+  sellerName?: string;
+  items: OrderStatusUpdateItemDetail[];
+  tracking?: {
+    courier?: string;
+    trackingNumber?: string;
+    trackingUrl?: string;
+    estimatedDeliveryDate?: string;
+  };
+}
+
 export type EmailJobData =
   | { type: "WELCOME"; data: WelcomeEmailJobPayload }
   | { type: "EMAIL_VERIFICATION_OTP"; data: EmailVerificationOtpJobPayload }
   | { type: "PASSWORD_RESET_OTP"; data: PasswordResetOtpJobPayload }
   | { type: "ORDER_CONFIRMATION"; data: OrderConfirmationEmailJobPayload }
   | { type: "SELLER_NEW_ORDER_ALERT"; data: SellerNewOrderAlertJobPayload }
-  | { type: "ORDER_CANCELLATION"; data: OrderCancellationEmailJobPayload };
+  | { type: "ORDER_CANCELLATION"; data: OrderCancellationEmailJobPayload }
+  | { type: "ORDER_STATUS_UPDATE"; data: OrderStatusUpdateEmailJobPayload };
+

@@ -43,7 +43,20 @@ export const bookListingQuerySchema = z
       .union([z.boolean(), z.enum(["true", "false"])])
       .transform((val) => val === true || val === "true")
       .optional(),
+    homepage: z
+      .union([z.boolean(), z.enum(["true", "false"])])
+      .transform((val) => val === true || val === "true")
+      .optional(),
     groupByBook: z
+      .union([z.boolean(), z.enum(["true", "false"])])
+      .transform((val) => val === true || val === "true")
+      .optional(),
+    bestsellers: z
+      .union([z.boolean(), z.enum(["true", "false"])])
+      .transform((val) => val === true || val === "true")
+      .optional(),
+    period: z.enum(["week", "month", "all_time"]).optional(),
+    ispopularnovel: z
       .union([z.boolean(), z.enum(["true", "false"])])
       .transform((val) => val === true || val === "true")
       .optional(),
@@ -83,7 +96,7 @@ export const bookListingQuerySchema = z
         "name_asc",
         "name_desc",
       ])
-      .default("sellingPriceInPaise"),
+      .optional(),
     sortOrder: z
       .enum(["asc", "desc", "lowToHigh", "highToLow", "1", "-1"])
       .default("asc"),
@@ -184,11 +197,43 @@ export const bookListingQuerySchema = z
       maxPrice: data.maxPrice,
       sortBy,
       sortOrder,
+      hasExplicitSort: Boolean(data.sortBy),
       homesection: data.homesection || data.groupByBook,
+      homepage: data.homepage,
+      bestsellers: data.bestsellers,
+      period: data.period,
+      ispopularnovel: data.ispopularnovel,
     };
   });
 
 export type BookListingQueryInput = z.infer<typeof bookListingQuerySchema>;
+
+export const popularNovelsQuerySchema = z.object({
+  page: z.coerce.number().int().positive().default(1),
+  limit: z.coerce.number().int().positive().max(100).default(8),
+  category: z.string().trim().optional(),
+  ispopularnovel: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((val) => val === true || val === "true")
+    .optional(),
+  homepage: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((val) => val === true || val === "true")
+    .optional(),
+  homesection: z
+    .union([z.boolean(), z.enum(["true", "false"])])
+    .transform((val) => val === true || val === "true")
+    .optional(),
+});
+
+export type PopularNovelsQueryInput = z.infer<typeof popularNovelsQuerySchema>;
+
+export const bestsellerQuerySchema = z.object({
+  limit: z.coerce.number().int().positive().max(50).default(5),
+  period: z.enum(["week", "month", "all_time"]).default("week"),
+});
+
+export type BestsellerQueryInput = z.infer<typeof bestsellerQuerySchema>;
 
 export const bookListingParamSchema = z.object({
   id: z.string().trim().regex(objectIdRegex, "Invalid listing ID"),

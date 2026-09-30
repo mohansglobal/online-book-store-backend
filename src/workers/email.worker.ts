@@ -9,6 +9,7 @@ import {
   sendOrderConfirmationEmail,
   sendSellerNewOrderAlertEmail,
   sendOrderCancellationEmail,
+  sendOrderStatusUpdateEmail,
 } from "../services/email.service.js";
 import type {
   WelcomeEmailJobPayload,
@@ -17,6 +18,7 @@ import type {
   OrderConfirmationEmailJobPayload,
   SellerNewOrderAlertJobPayload,
   OrderCancellationEmailJobPayload,
+  OrderStatusUpdateEmailJobPayload,
 } from "../types/queue.types.js";
 
 const handleWelcomeEmail = async (data: WelcomeEmailJobPayload) => {
@@ -79,6 +81,20 @@ const handleOrderCancellation = async (data: OrderCancellationEmailJobPayload) =
   return await sendOrderCancellationEmail(data);
 };
 
+const handleOrderStatusUpdate = async (
+  data: OrderStatusUpdateEmailJobPayload,
+) => {
+  logger.info(
+    {
+      recipientEmail: data.toEmail,
+      orderNumber: data.orderNumber,
+      newStatus: data.newStatus,
+    },
+    "Processing order status update email job via SMTP",
+  );
+  return await sendOrderStatusUpdateEmail(data);
+};
+
 //Main email queue worker processor function.
 
 export const processEmailJob = async (job: Job) => {
@@ -111,6 +127,11 @@ export const processEmailJob = async (job: Job) => {
     case EMAIL_JOB_NAMES.SEND_ORDER_CANCELLATION:
       return await handleOrderCancellation(
         job.data as OrderCancellationEmailJobPayload,
+      );
+
+    case EMAIL_JOB_NAMES.SEND_ORDER_STATUS_UPDATE:
+      return await handleOrderStatusUpdate(
+        job.data as OrderStatusUpdateEmailJobPayload,
       );
 
     default:

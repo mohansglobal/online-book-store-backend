@@ -74,6 +74,14 @@ export const createAddressSchema = z.object({
 
 export type CreateAddressInput = z.infer<typeof createAddressSchema>;
 
+export const createDualAddressSchema = z.object({
+  sameAsBilling: z.boolean().default(false),
+  billing: createAddressSchema.omit({ addressType: true }),
+  shipping: createAddressSchema.omit({ addressType: true }).optional(),
+});
+
+export type CreateDualAddressInput = z.infer<typeof createDualAddressSchema>;
+
 export const updateAddressSchema = createAddressSchema.partial();
 
 export type UpdateAddressInput = z.infer<typeof updateAddressSchema>;

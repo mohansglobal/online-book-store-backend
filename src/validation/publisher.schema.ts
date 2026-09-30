@@ -4,11 +4,15 @@ export const publisherQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().nonnegative().optional(),
   search: z.string().trim().optional(),
+  letter: z.string().trim().optional(),
   isActive: z
     .enum(["true", "false"])
     .transform((val) => val === "true")
     .optional(),
-  sortBy: z.enum(["name", "createdAt"]).default("name"),
+  sortBy: z
+    .enum(["name", "title", "createdAt"])
+    .default("name")
+    .transform((val) => (val === "title" ? "name" : val)),
   sortOrder: z.enum(["asc", "desc"]).default("asc"),
 });
 

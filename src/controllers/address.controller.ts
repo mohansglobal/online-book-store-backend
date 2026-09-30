@@ -6,6 +6,7 @@ import {
   getDefaultAddressService,
   getAddressByIdService,
   createAddressService,
+  createDualAddressService,
   updateAddressService,
   setDefaultAddressService,
   deleteAddressService,
@@ -13,6 +14,7 @@ import {
 import type {
   AddressQueryInput,
   CreateAddressInput,
+  CreateDualAddressInput,
   UpdateAddressInput,
 } from "../validation/address.schema.js";
 
@@ -46,6 +48,19 @@ export const createAddress = asyncHandler(async (req, res) => {
     HTTP_STATUS.CREATED,
     "Address created successfully",
     address,
+  );
+});
+
+export const createDualAddress = asyncHandler(async (req, res) => {
+  const result = await createDualAddressService(
+    req.user!.id,
+    req.body as CreateDualAddressInput,
+  );
+  apiResponse(
+    res,
+    HTTP_STATUS.CREATED,
+    "Billing and shipping addresses created successfully",
+    result,
   );
 });
 

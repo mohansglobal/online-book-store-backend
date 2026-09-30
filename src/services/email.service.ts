@@ -10,6 +10,7 @@ import type {
   WelcomeEmailJobPayload,
   EmailVerificationOtpJobPayload,
   PasswordResetOtpJobPayload,
+  OrderStatusUpdateEmailJobPayload,
 } from "../types/queue.types.js";
 
 const smtpHost = env.EMAIL_HOST || "smtp.hostinger.com";
@@ -296,6 +297,84 @@ Online BookStore`;
   return sendEmail({
     to: data.toEmail,
     subject,
+    text,
+  });
+};
+
+export const sendOrderStatusUpdateEmail = async (
+  data: OrderStatusUpdateEmailJobPayload,
+) => {
+  const normalizedStatus = data.newStatus.toUpperCase();
+
+  let defaultStatusMessage = `Your order status has been updated to ${normalizedStatus}.`;
+
+  if (normalizedStatus === "CONFIRMED") {
+    defaultStatusMessage =
+      "Your order has been confirmed by the seller and is queued for preparation.";
+  } else if (normalizedStatus === "PROCESSING") {
+    defaultStatusMessage =
+      "The seller is currently processing and packing your book items.";
+  } else if (normalizedStatus === "SHIPPED") {
+    defaultStatusMessage =
+      "Great news! Your order has been dispatched and is on its way to you.";
+  } else if (normalizedStatus === "DELIVERED") {
+    defaultStatusMessage =
+      "Your order has been successfully delivered! We hope you enjoy your reading experience.";
+  } else if (normalizedStatus === "CANCELLED") {
+    defaultStatusMessage =
+      "The seller or system has cancelled the specified items in your order.";
+  }
+
+  const effectiveMessage = data.statusMessage || defaultStatusMessage;
+
+  const orderItemsList = data.items
+    .map(
+      (item) =>
+        `- ${item.title} (Quantity: ${item.quantity}) - Status: ${item.status}`,
+    )
+    .join("\n");
+
+  let trackingSection = "";
+  if (data.tracking?.courier || data.tracking?.trackingNumber) {
+    const courierLine = data.tracking.courier
+      ? `Courier: ${data.tracking.courier}\n`
+      : "";
+    const trackingNumberLine = data.tracking.trackingNumber
+      ? `Tracking Number: ${data.tracking.trackingNumber}\n`
+      : "";
+    const trackingUrlLine = data.tracking.trackingUrl
+      ? `Tracking Link: ${data.tracking.trackingUrl}\n`
+      : "";
+    const etaLine = data.tracking.estimatedDeliveryDate
+      ? `Estimated Delivery: ${data.tracking.estimatedDeliveryDate}\n`
+      : "";
+    trackingSection = `\nDelivery & Tracking Information:\n${courierLine}${trackingNumberLine}${trackingUrlLine}${etaLine}`;
+  }
+
+  const sellerNote = data.sellerName
+    ? `Fulfilled by: ${data.sellerName}\n`
+    : "";
+
+  const text = `Hello ${data.buyerName},
+
+${effectiveMessage}
+
+Order Number: ${data.orderNumber}
+Current Status: ${normalizedStatus}
+${sellerNote}${trackingSection}
+Updated Items:
+${orderItemsList}
+
+You can track your order status anytime by visiting your account dashboard on Online BookStore.
+
+Thank you for choosing Online BookStore!
+
+Regards,
+Online BookStore`;
+
+  return sendEmail({
+    to: data.toEmail,
+    subject: `Order #${data.orderNumber} Status Update: ${normalizedStatus}`,
     text,
   });
 };

@@ -10,6 +10,7 @@ import {
   initiateRazorpayOrderService,
   cancelOrderService,
   updateOrderItemFulfillmentService,
+  updateSellerOrderStatusService,
 } from "../services/order.service.js";
 import type {
   CheckoutInput,
@@ -18,6 +19,7 @@ import type {
   InitiateRazorpayOrderInput,
   CancelOrderInput,
   UpdateOrderItemFulfillmentInput,
+  UpdateSellerOrderStatusInput,
 } from "../validation/order.schema.js";
 
 export const createOrder = asyncHandler(async (req, res) => {
@@ -95,6 +97,24 @@ export const updateOrderItemFulfillment = asyncHandler(async (req, res) => {
     res,
     HTTP_STATUS.OK,
     "Order item fulfillment updated successfully",
+    result,
+  );
+});
+
+export const updateSellerOrderStatus = asyncHandler(async (req, res) => {
+  const orderId = req.params.id as string;
+  const input = req.body as UpdateSellerOrderStatusInput;
+
+  const result = await updateSellerOrderStatusService(
+    orderId,
+    req.user!,
+    input,
+  );
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Order status updated successfully",
     result,
   );
 });

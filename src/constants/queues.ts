@@ -12,6 +12,7 @@ export const EMAIL_JOB_NAMES = {
   SEND_ORDER_CONFIRMATION: "send-order-confirmation",
   SEND_SELLER_NEW_ORDER_ALERT: "send-seller-new-order-alert",
   SEND_ORDER_CANCELLATION: "send-order-cancellation",
+  SEND_ORDER_STATUS_UPDATE: "send-order-status-update",
 } as const;
 
 export type EmailJobName = (typeof EMAIL_JOB_NAMES)[keyof typeof EMAIL_JOB_NAMES];

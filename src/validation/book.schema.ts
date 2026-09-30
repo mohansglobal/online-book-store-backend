@@ -73,6 +73,10 @@ export const bookQuerySchema = z
     sortOrder: z
       .enum(["asc", "desc", "lowToHigh", "highToLow", "1", "-1"])
       .default("desc"),
+    ispopularnovel: z
+      .union([z.boolean(), z.enum(["true", "false"])])
+      .transform((val) => val === true || val === "true")
+      .optional(),
   })
   .transform((data) => {
     const categories = Array.from(
@@ -171,6 +175,7 @@ export const bookQuerySchema = z
       maxPriceIn,
       sortBy,
       sortOrder,
+      ispopularnovel: data.ispopularnovel,
     };
   });
 

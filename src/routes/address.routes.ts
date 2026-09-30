@@ -4,6 +4,7 @@ import { authenticate } from "../middlewares/auth.middleware.js";
 import { validate } from "../middlewares/validate.middleware.js";
 import {
   createAddressSchema,
+  createDualAddressSchema,
   updateAddressSchema,
   addressQuerySchema,
   addressParamSchema,
@@ -13,6 +14,7 @@ import {
   getDefaultAddress,
   getAddressById,
   createAddress,
+  createDualAddress,
   updateAddress,
   setDefaultAddress,
   deleteAddress,
@@ -25,6 +27,7 @@ router.use(authenticate);
 router.get("/", validate(addressQuerySchema, "query"), getAddresses);
 router.get("/default", validate(addressQuerySchema, "query"), getDefaultAddress);
 router.get("/:id", validate(addressParamSchema, "params"), getAddressById);
+router.post("/dual", validate(createDualAddressSchema, "body"), createDualAddress);
 router.post("/", validate(createAddressSchema, "body"), createAddress);
 router.patch(
   "/:id",

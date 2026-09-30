@@ -15,6 +15,10 @@ import {
   toggleBookStatusSchema,
 } from "../validation/book.schema.js";
 import {
+  bestsellerQuerySchema,
+  popularNovelsQuerySchema,
+} from "../validation/book-listing.schema.js";
+import {
   getBooks,
   getBookByIdOrSlug,
   lookupBookByIsbn,
@@ -22,10 +26,24 @@ import {
   updateBook,
   toggleBookStatus,
 } from "../controllers/book.controller.js";
+import {
+  getThisWeekBestsellers,
+  getPopularNovels,
+} from "../controllers/book-listing.controller.js";
 
 const router = Router();
 
 router.get("/", validate(bookQuerySchema, "query"), getBooks);
+router.get(
+  "/bestsellers",
+  validate(bestsellerQuerySchema, "query"),
+  getThisWeekBestsellers,
+);
+router.get(
+  "/popular-novels",
+  validate(popularNovelsQuerySchema, "query"),
+  getPopularNovels,
+);
 router.get(
   "/isbn/:isbn",
   optionalAuthenticate,

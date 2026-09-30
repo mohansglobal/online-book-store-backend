@@ -18,15 +18,13 @@ export const getAuthorsService = async (query: AuthorQueryInput) => {
   if (query.isActive !== undefined) {
     filter.isActive = query.isActive;
   }
-
+  
   if (query.search) {
     const escapedSearch = query.search.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const searchRegex = new RegExp(escapedSearch, "i");
     filter.$or = [
       { name: { $regex: searchRegex } },
       { nameBn: { $regex: searchRegex } },
-      { slug: { $regex: searchRegex } },
-      { bio: { $regex: searchRegex } },
     ];
   }
 
@@ -34,10 +32,55 @@ export const getAuthorsService = async (query: AuthorQueryInput) => {
   const limit = query.limit;
   const isUnlimited = limit === undefined || limit === 0;
 
+  if (query.homepage) {
+    const shuffleLimit = limit && limit > 0 ? limit : 10;
+
+    const [authors, total] = await Promise.all([
+      AuthorModel.aggregate([
+        { $match: filter },
+        {
+          $sort: {
+            photo: -1,
+            createdAt: -1,
+          },
+        },
+        {
+          $group: {
+            _id: "$name",
+            doc: { $first: "$$ROOT" },
+          },
+        },
+        { $replaceRoot: { newRoot: "$doc" } },
+        { $sample: { size: shuffleLimit } },
+      ]),
+      AuthorModel.countDocuments(filter),
+    ]);
+
+    const totalPages = Math.ceil(total / shuffleLimit) || 1;
+
+    return {
+      authors,
+      meta: {
+        page: 1,
+        limit: shuffleLimit,
+        total,
+        totalPages,
+        hasNextPage: false,
+        hasPrevPage: false,
+      },
+    };
+  }
+
   const sortBy = query.sortBy ?? "createdAt";
   const sortDirection = query.sortOrder === "asc" ? 1 : -1;
 
-  let queryBuilder = AuthorModel.find(filter).sort({
+  let queryBuilder = AuthorModel.find(filter);
+
+  if (sortBy === "name") {
+    queryBuilder = queryBuilder.collation({ locale: "en", strength: 2 });
+  }
+
+  queryBuilder = queryBuilder.sort({
     [sortBy]: sortDirection,
   });
 
@@ -52,6 +95,8 @@ export const getAuthorsService = async (query: AuthorQueryInput) => {
   ]);
 
   const totalPages = isUnlimited ? 1 : Math.ceil(total / limit) || 1;
+  const hasNextPage = isUnlimited ? false : page < totalPages;
+  const hasPrevPage = isUnlimited ? false : page > 1;
 
   return {
     authors,
@@ -60,6 +105,8 @@ export const getAuthorsService = async (query: AuthorQueryInput) => {
       limit: isUnlimited ? total : limit,
       total,
       totalPages,
+      hasNextPage,
+      hasPrevPage,
     },
   };
 };

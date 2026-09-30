@@ -6,6 +6,7 @@ import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
 import type {
   CreateAddressInput,
+  CreateDualAddressInput,
   UpdateAddressInput,
 } from "../validation/address.schema.js";
 
@@ -132,6 +133,84 @@ export const createAddressService = async (
   );
 
   return address;
+};
+
+//@desc Create dual addresses (Billing & Shipping) for checkout
+//@route POST /api/v1/addresses/dual
+//@access Private
+export const createDualAddressService = async (
+  userId: string,
+  input: CreateDualAddressInput,
+) => {
+  const userObjectId = new mongoose.Types.ObjectId(userId);
+
+  // 1. Create or update default for Billing Address
+  await AddressModel.updateMany(
+    { user: userObjectId, addressType: "BILLING" },
+    { isDefault: false },
+  );
+
+  const billingAddress = await AddressModel.create({
+    user: userObjectId,
+    addressType: "BILLING",
+    fullName: input.billing.fullName,
+    email: input.billing.email,
+    mobileNumber: input.billing.mobileNumber,
+    country: input.billing.country,
+    countryRef: input.billing.countryRef
+      ? new mongoose.Types.ObjectId(input.billing.countryRef)
+      : undefined,
+    state: input.billing.state,
+    city: input.billing.city,
+    postalCode: input.billing.postalCode,
+    streetAddress: input.billing.streetAddress,
+    apartment: input.billing.apartment ?? "",
+    isDefault: true,
+  });
+
+  // 2. Determine Shipping Source (same as billing or separate shipping)
+  const shippingSource =
+    input.sameAsBilling || !input.shipping
+      ? input.billing
+      : input.shipping;
+
+  await AddressModel.updateMany(
+    { user: userObjectId, addressType: "SHIPPING" },
+    { isDefault: false },
+  );
+
+  const shippingAddress = await AddressModel.create({
+    user: userObjectId,
+    addressType: "SHIPPING",
+    fullName: shippingSource.fullName,
+    email: shippingSource.email,
+    mobileNumber: shippingSource.mobileNumber,
+    country: shippingSource.country,
+    countryRef: shippingSource.countryRef
+      ? new mongoose.Types.ObjectId(shippingSource.countryRef)
+      : undefined,
+    state: shippingSource.state,
+    city: shippingSource.city,
+    postalCode: shippingSource.postalCode,
+    streetAddress: shippingSource.streetAddress,
+    apartment: shippingSource.apartment ?? "",
+    isDefault: true,
+  });
+
+  logger.info(
+    {
+      userId,
+      billingAddressId: billingAddress._id.toString(),
+      shippingAddressId: shippingAddress._id.toString(),
+      sameAsBilling: input.sameAsBilling,
+    },
+    "Dual addresses (Billing & Shipping) created successfully",
+  );
+
+  return {
+    billingAddress,
+    shippingAddress,
+  };
 };
 
 //@desc Update address for a user

@@ -11,6 +11,7 @@ import {
   initiateRazorpayOrderSchema,
   cancelOrderSchema,
   updateOrderItemFulfillmentSchema,
+  updateSellerOrderStatusSchema,
 } from "../validation/order.schema.js";
 import { sellerDashboardRecentOrdersQuerySchema } from "../validation/dashboard.schema.js";
 import {
@@ -23,6 +24,7 @@ import {
   cancelOrder,
   cancelOrderItem,
   updateOrderItemFulfillment,
+  updateSellerOrderStatus,
 } from "../controllers/order.controller.js";
 import { getSellerRecentOrders } from "../controllers/dashboard.controller.js";
 
@@ -72,6 +74,22 @@ router.patch(
   validate(orderItemParamSchema, "params"),
   validate(updateOrderItemFulfillmentSchema, "body"),
   updateOrderItemFulfillment,
+);
+
+// 4c) Seller Order Status Update: PATCH /api/v1/orders/:id/status (with /seller-status as alias)
+router.patch(
+  "/:id/status",
+  authorize("SELLER", "ADMIN"),
+  validate(orderParamSchema, "params"),
+  validate(updateSellerOrderStatusSchema, "body"),
+  updateSellerOrderStatus,
+);
+router.patch(
+  "/:id/seller-status",
+  authorize("SELLER", "ADMIN"),
+  validate(orderParamSchema, "params"),
+  validate(updateSellerOrderStatusSchema, "body"),
+  updateSellerOrderStatus,
 );
 
 // 5) See all orders: GET /api/v1/orders (with /me as alias)

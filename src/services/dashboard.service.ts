@@ -4,6 +4,7 @@ import { OrderModel } from "../models/order.model.js";
 import { BookListingModel } from "../models/book-listing.model.js";
 import { BookModel } from "../models/book.model.js";
 import { logger } from "../utils/logger.js";
+import { computeSellerOrderStatus } from "./order.service.js";
 import type {
   SellerDashboardRecentOrdersQueryInput,
   SellerRevenueAnalyticsQueryInput,
@@ -150,6 +151,7 @@ export const getSellerRecentOrdersDashboardService = async (
     });
 
     const sellerTotalInRupees = Math.round(sellerOrderTotalInPaise / 100);
+    const sellerStatus = computeSellerOrderStatus(sellerItems, order.orderStatus);
 
     return {
       orderId: order._id.toString(),
@@ -160,7 +162,8 @@ export const getSellerRecentOrdersDashboardService = async (
         email: customerEmail,
         profilePicture: customerProfilePicture,
       },
-      orderStatus: order.orderStatus,
+      orderStatus: sellerStatus,
+      overallOrderStatus: order.orderStatus,
       paymentStatus: order.paymentStatus,
       paymentMethod: order.paymentMethod,
       createdAt: order.createdAt,

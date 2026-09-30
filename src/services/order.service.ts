@@ -19,6 +19,7 @@ import {
   dispatchOrderConfirmationJob,
   dispatchSellerNewOrderAlertJob,
   dispatchOrderCancellationJob,
+  dispatchOrderStatusUpdateJob,
 } from "../queues/email.queue.js";
 import type {
   CreateOrderInput,
@@ -27,6 +28,7 @@ import type {
   InitiateRazorpayOrderInput,
   CancelOrderInput,
   UpdateOrderItemFulfillmentInput,
+  UpdateSellerOrderStatusInput,
 } from "../validation/order.schema.js";
 
 const generateOrderNumber = (): string => {
@@ -148,6 +150,84 @@ const sendOrderCancellationNotifications = async (
     logger.error(
       { error, orderId: order._id, orderNumber: order.orderNumber },
       "Failed to dispatch order cancellation email job",
+    );
+  }
+};
+
+interface OrderStatusNotificationParams {
+  order: OrderDocument & { _id: mongoose.Types.ObjectId };
+  updatedItems: Array<{
+    title: string;
+    quantity: number;
+    status: string;
+  }>;
+  newStatus: string;
+  previousStatus?: string;
+  statusMessage?: string;
+  sellerId?: string;
+  tracking?: {
+    courier?: string;
+    trackingNumber?: string;
+    trackingUrl?: string;
+    estimatedDeliveryDate?: string;
+  };
+}
+
+const sendOrderStatusUpdateNotification = async ({
+  order,
+  updatedItems,
+  newStatus,
+  previousStatus,
+  statusMessage,
+  sellerId,
+  tracking,
+}: OrderStatusNotificationParams) => {
+  try {
+    const buyerId = order.buyer.toString();
+    const buyer = await UserModel.findById(buyerId).lean();
+
+    const recipientEmail = order.shippingAddress?.email || buyer?.email;
+    const recipientName =
+      order.shippingAddress?.fullName || buyer?.name || "Valued Customer";
+
+    if (!recipientEmail) {
+      logger.warn(
+        { orderId: order._id, orderNumber: order.orderNumber },
+        "No recipient email found for order status update notification",
+      );
+      return;
+    }
+
+    let sellerName: string | undefined = undefined;
+    if (sellerId) {
+      const seller = await UserModel.findById(sellerId).lean();
+      if (seller?.name) {
+        sellerName = seller.name;
+      }
+    }
+
+    const itemsPayload = updatedItems.map((item) => ({
+      title: item.title,
+      quantity: item.quantity,
+      status: item.status,
+    }));
+
+    await dispatchOrderStatusUpdateJob({
+      toEmail: recipientEmail,
+      buyerName: recipientName,
+      orderNumber: order.orderNumber,
+      orderId: order._id.toString(),
+      newStatus,
+      previousStatus,
+      statusMessage,
+      sellerName,
+      items: itemsPayload,
+      tracking,
+    });
+  } catch (error) {
+    logger.error(
+      { error, orderId: order._id, orderNumber: order.orderNumber, newStatus },
+      "Failed to dispatch background order status update email job",
     );
   }
 };
@@ -643,6 +723,70 @@ export const getMyOrdersService = async (
   };
 };
 
+/**
+ * Computes the fulfillment status specifically for a seller's portion of an order.
+ * If all of this seller's items are shipped, the seller sees "SHIPPED",
+ * even if another seller's items in the same multi-seller order are still pending.
+ */
+export const computeSellerOrderStatus = (
+  sellerItems: Array<{ status?: string | null }>,
+  fallbackStatus: string = "CONFIRMED",
+): string => {
+  if (!sellerItems || sellerItems.length === 0) {
+    return fallbackStatus;
+  }
+
+  let activeCount = 0;
+  let deliveredCount = 0;
+  let shippedCount = 0;
+  let processingCount = 0;
+  let confirmedCount = 0;
+
+  for (const it of sellerItems) {
+    const status = it.status ? it.status.toUpperCase() : "";
+    if (status === "CANCELLED") {
+      // Do not count cancelled items in active total
+    } else {
+      activeCount += 1;
+      if (status === "DELIVERED") {
+        deliveredCount += 1;
+      } else if (status === "SHIPPED") {
+        shippedCount += 1;
+      } else if (status === "PROCESSING") {
+        processingCount += 1;
+      } else if (status === "CONFIRMED" || status === "PENDING") {
+        confirmedCount += 1;
+      }
+    }
+  }
+
+  if (activeCount === 0) {
+    return "CANCELLED";
+  }
+
+  if (deliveredCount === activeCount) {
+    return "DELIVERED";
+  }
+
+  if (shippedCount + deliveredCount === activeCount) {
+    return "SHIPPED";
+  }
+
+  if (shippedCount > 0 || deliveredCount > 0) {
+    return "PARTIALLY_SHIPPED";
+  }
+
+  if (processingCount > 0) {
+    return "PROCESSING";
+  }
+
+  if (confirmedCount > 0) {
+    return "CONFIRMED";
+  }
+
+  return fallbackStatus;
+};
+
 export const getSellerOrdersService = async (
   sellerId: string,
   query: OrderQueryInput,
@@ -666,7 +810,7 @@ export const getSellerOrdersService = async (
       .sort({ createdAt: -1 })
       .skip(skip)
       .limit(limit)
-      .populate("buyer", "name email mobileNumber")
+      .populate("buyer", "name email mobileNumber profilePicture")
       .populate("items.seller", "name email")
       .populate("items.book", "title titleBn coverImage images slug format")
       .populate("items.bookListing", "format condition edition mrpInPaise sellingPriceInPaise")
@@ -701,8 +845,15 @@ export const getSellerOrdersService = async (
       0,
     );
 
+    const sellerFulfillmentStatus = computeSellerOrderStatus(
+      sellerItems,
+      order.orderStatus,
+    );
+
     return {
       ...order,
+      orderStatus: sellerFulfillmentStatus,
+      overallOrderStatus: order.orderStatus,
       items: sellerItems,
       sellerSubtotalInPaise: sellerSubtotal,
     };
@@ -724,7 +875,7 @@ export const getOrderByIdService = async (
   userContext: { id: string; role: string },
 ) => {
   const order = await OrderModel.findById(orderId)
-    .populate("buyer", "name email mobileNumber")
+    .populate("buyer", "name email mobileNumber profilePicture")
     .populate("items.seller", "name email")
     .populate("items.book", "title titleBn coverImage images slug format")
     .populate("items.bookListing", "format condition edition mrpInPaise sellingPriceInPaise")
@@ -1147,6 +1298,29 @@ export const updateOrderItemFulfillmentService = async (
 
   await order.save();
 
+  if (input.status) {
+    void sendOrderStatusUpdateNotification({
+      order,
+      updatedItems: [
+        {
+          title: item.title,
+          quantity: item.quantity,
+          status: item.status,
+        },
+      ],
+      newStatus: item.status,
+      sellerId: userContext.id,
+      tracking: {
+        courier: item.tracking?.courier ?? undefined,
+        trackingNumber: item.tracking?.trackingNumber ?? undefined,
+        trackingUrl: item.tracking?.trackingUrl ?? undefined,
+        estimatedDeliveryDate: item.estimatedDeliveryDate
+          ? item.estimatedDeliveryDate.toISOString()
+          : undefined,
+      },
+    });
+  }
+
   logger.info(
     {
       orderId: order._id,
@@ -1261,3 +1435,244 @@ export const initiateRazorpayOrderService = async (
     keyId: env.RAZORPAY_KEY_ID || "",
   };
 };
+
+export const updateSellerOrderStatusService = async (
+  orderId: string,
+  userContext: { id: string; role: string },
+  input: UpdateSellerOrderStatusInput,
+) => {
+  const order = await OrderModel.findById(orderId);
+
+  if (!order) {
+    throw new AppError("Order not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  const isAdmin = userContext.role === "ADMIN";
+  const sellerId = userContext.id;
+
+  // Authorization: check if user is admin or seller of at least one item
+  const hasSellerItems = order.items.some(
+    (item) => item.seller.toString() === sellerId,
+  );
+
+  if (!isAdmin && !hasSellerItems) {
+    throw new AppError(
+      "Forbidden: You do not have permission to update this order",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  // Prevent modifying terminal status orders
+  if (order.orderStatus === "CANCELLED") {
+    throw new AppError(
+      "Cannot update status of a cancelled order",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  if (order.orderStatus === "DELIVERED") {
+    throw new AppError(
+      "Order has already been delivered and cannot be modified",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  // Identify target items belonging to this seller (or all items if ADMIN)
+  const targetItems = order.items.filter((item) => {
+    const isOwner = isAdmin || item.seller.toString() === sellerId;
+    if (!isOwner) {
+      return false;
+    }
+
+    if (input.itemId) {
+      const subdocId = item._id ? item._id.toString() : "";
+      const listingId = item.bookListing ? item.bookListing.toString() : "";
+      return subdocId === input.itemId || listingId === input.itemId;
+    }
+
+    return true;
+  });
+
+  if (targetItems.length === 0) {
+    throw new AppError(
+      "No eligible items found for your seller account in this order",
+      HTTP_STATUS.NOT_FOUND,
+    );
+  }
+
+  const previousOrderStatus = order.orderStatus;
+  const newStatus = input.status;
+
+  // Validate state transitions for each target item
+  for (const item of targetItems) {
+    if (item.status === "CANCELLED" && newStatus !== "CANCELLED") {
+      throw new AppError(
+        `Item "${item.title}" is already cancelled and cannot be updated to ${newStatus}`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+
+    if (item.status === "DELIVERED" && newStatus !== "DELIVERED") {
+      throw new AppError(
+        `Item "${item.title}" is already delivered and cannot be modified`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  }
+
+  const updatedItemsList: Array<{
+    title: string;
+    quantity: number;
+    status: string;
+  }> = [];
+
+  const now = new Date();
+
+  // Apply status updates
+  for (const item of targetItems) {
+    // If transitioning to CANCELLED for the first time, restore stock atomically
+    if (newStatus === "CANCELLED" && item.status !== "CANCELLED") {
+      await BookListingModel.findByIdAndUpdate(item.bookListing, {
+        $inc: { stock: item.quantity },
+      });
+
+      const cancellationReasonText =
+        input.cancellationReason || "Cancelled by seller";
+
+      item.status = "CANCELLED";
+      item.cancellation = {
+        cancelledAt: now,
+        cancellationReason: cancellationReasonText,
+      };
+
+      if (order.paymentStatus === "PAID") {
+        const currentRefund = order.refundAmountInPaise || 0;
+        order.refundAmountInPaise = currentRefund + item.subtotalInPaise;
+      }
+    } else {
+      item.status = newStatus;
+
+      if (!item.tracking) {
+        item.tracking = {};
+      }
+
+      if (input.courier) {
+        item.tracking.courier = input.courier;
+      }
+
+      if (input.trackingNumber) {
+        item.tracking.trackingNumber = input.trackingNumber;
+      }
+
+      if (input.trackingUrl !== undefined) {
+        item.tracking.trackingUrl = input.trackingUrl;
+      }
+
+      if (input.estimatedDeliveryDate) {
+        item.estimatedDeliveryDate = new Date(input.estimatedDeliveryDate);
+      }
+
+      if (newStatus === "SHIPPED") {
+        item.tracking.shippedAt = now;
+      } else if (newStatus === "DELIVERED") {
+        item.tracking.deliveredAt = now;
+      }
+    }
+
+    updatedItemsList.push({
+      title: item.title,
+      quantity: item.quantity,
+      status: item.status,
+    });
+  }
+
+  // Recalculate parent order status
+  let totalActiveItems = 0;
+  let deliveredCount = 0;
+  let shippedCount = 0;
+  let processingCount = 0;
+  let confirmedCount = 0;
+
+  for (const it of order.items) {
+    if (it.status === "CANCELLED") {
+      // Do not count in active items
+    } else {
+      totalActiveItems += 1;
+      if (it.status === "DELIVERED") {
+        deliveredCount += 1;
+      } else if (it.status === "SHIPPED") {
+        shippedCount += 1;
+      } else if (it.status === "PROCESSING") {
+        processingCount += 1;
+      } else if (it.status === "CONFIRMED") {
+        confirmedCount += 1;
+      }
+    }
+  }
+
+  if (totalActiveItems === 0) {
+    order.orderStatus = "CANCELLED";
+    order.cancelledAt = now;
+    order.cancellationReason =
+      input.cancellationReason || "All items cancelled by seller";
+    order.cancelledBy = new mongoose.Types.ObjectId(userContext.id);
+
+    if (order.paymentStatus === "PAID") {
+      order.refundStatus = "PENDING";
+    }
+  } else if (deliveredCount === totalActiveItems) {
+    order.orderStatus = "DELIVERED";
+  } else if (shippedCount === totalActiveItems) {
+    order.orderStatus = "SHIPPED";
+  } else if (shippedCount > 0 || deliveredCount > 0) {
+    order.orderStatus = "PARTIALLY_SHIPPED";
+  } else if (processingCount > 0) {
+    order.orderStatus = "PROCESSING";
+  } else if (confirmedCount > 0) {
+    order.orderStatus = "CONFIRMED";
+  }
+
+  await order.save();
+
+  // Dispatch background email job to the buyer
+  void sendOrderStatusUpdateNotification({
+    order,
+    updatedItems: updatedItemsList,
+    newStatus,
+    previousStatus: previousOrderStatus,
+    statusMessage: input.message,
+    sellerId: userContext.id,
+    tracking: {
+      courier: input.courier,
+      trackingNumber: input.trackingNumber,
+      trackingUrl: input.trackingUrl,
+      estimatedDeliveryDate: input.estimatedDeliveryDate,
+    },
+  });
+
+  logger.info(
+    {
+      orderId: order._id,
+      orderNumber: order.orderNumber,
+      sellerId: userContext.id,
+      newStatus,
+      parentOrderStatus: order.orderStatus,
+      updatedItemsCount: updatedItemsList.length,
+    },
+    "Seller updated order status successfully; dispatched background notification",
+  );
+
+  const sellerFulfillmentStatus = computeSellerOrderStatus(
+    targetItems,
+    newStatus,
+  );
+
+  return {
+    order,
+    updatedItems: updatedItemsList,
+    newStatus,
+    orderStatus: sellerFulfillmentStatus,
+    overallOrderStatus: order.orderStatus,
+  };
+};
+
