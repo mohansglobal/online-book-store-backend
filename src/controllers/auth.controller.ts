@@ -14,6 +14,8 @@ import {
   sendPhoneOtpService,
   verifyPhoneOtpService,
   changePasswordService,
+  verifyEmailService,
+  resendEmailOtpService,
 } from "../services/auth.service.js";
 import {
   forgotPasswordService,
@@ -34,7 +36,44 @@ import { ACCESS_TOKEN_COOKIE_MAX_AGE_MS, REFRESH_TOKEN_COOKIE_MAX_AGE_MS } from 
 export const register = asyncHandler(async (req, res) => {
   const user = await registerUserService(req.body);
 
-  apiResponse(res, HTTP_STATUS.CREATED, "User registered successfully", user);
+  apiResponse(
+    res,
+    HTTP_STATUS.CREATED,
+    "Registration successful. A verification code has been sent to your email.",
+    user,
+  );
+});
+
+export const verifyEmail = asyncHandler(async (req, res) => {
+  const { user, accessToken, refreshToken } = await verifyEmailService(req.body);
+
+  res.cookie("accessToken", accessToken, {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: env.NODE_ENV === "production" ? "strict" : "lax",
+    maxAge: ACCESS_TOKEN_COOKIE_MAX_AGE_MS,
+    path: "/",
+  });
+
+  res.cookie("refreshToken", refreshToken, {
+    httpOnly: true,
+    secure: env.NODE_ENV === "production",
+    sameSite: env.NODE_ENV === "production" ? "strict" : "lax",
+    maxAge: REFRESH_TOKEN_COOKIE_MAX_AGE_MS,
+    path: "/",
+  });
+
+  apiResponse(res, HTTP_STATUS.OK, "Email verified successfully", {
+    accessToken,
+    refreshToken,
+    user,
+  });
+});
+
+export const resendEmailOtp = asyncHandler(async (req, res) => {
+  const result = await resendEmailOtpService(req.body);
+
+  apiResponse(res, HTTP_STATUS.OK, result.message, result);
 });
 
 export const login = asyncHandler(async (req, res) => {

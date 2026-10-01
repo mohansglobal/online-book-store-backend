@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import bcrypt from "bcryptjs";
 
 import { UserModel } from "../models/user.model.js";
@@ -19,10 +20,15 @@ import {
   sendPhoneOtpService,
   verifyPhoneOtpService,
 } from "./phone-verification.service.js";
+import { formatMobileNumber } from "./sms.service.js";
+import { dispatchEmailVerificationOtpJob } from "../queues/email.queue.js";
+import { sendOtpEmail } from "./email.service.js";
 import type {
   RegisterInput,
   LoginInput,
   ChangePasswordInput,
+  VerifyEmailInput,
+  ResendEmailOtpInput,
 } from "../validation/auth.schema.js";
 
 const BCRYPT_SALT_ROUNDS = 12;
@@ -30,46 +36,87 @@ const REFRESH_TOKEN_EXPIRY_DAYS = 7;
 
 export const registerUserService = async (input: RegisterInput) => {
   const normalizedEmail = input.email.toLowerCase().trim();
-  const trimmedMobile = input.mobileNumber.trim();
+  const trimmedMobile = input.mobileNumber?.trim();
 
   const existingEmail = await UserModel.findOne({
     email: normalizedEmail,
   }).lean();
+
   if (existingEmail) {
     throw new AppError("Email is already registered", HTTP_STATUS.CONFLICT);
   }
 
-  const existingMobile = await UserModel.findOne({
-    mobileNumber: trimmedMobile,
-  }).lean();
-  if (existingMobile) {
-    throw new AppError(
-      "Mobile number is already registered",
-      HTTP_STATUS.CONFLICT,
-    );
+  if (trimmedMobile) {
+    const formattedMobile = formatMobileNumber(trimmedMobile);
+    const existingMobile = await UserModel.findOne({
+      $or: [
+        { mobileNumber: trimmedMobile },
+        { mobileNumber: formattedMobile },
+        { mobileNumber: `+${formattedMobile}` },
+      ],
+    }).lean();
+
+    if (existingMobile) {
+      throw new AppError(
+        "Mobile number is already registered",
+        HTTP_STATUS.CONFLICT,
+      );
+    }
   }
 
   const hashedPassword = await bcrypt.hash(input.password, BCRYPT_SALT_ROUNDS);
+
+  // Generate 6-digit OTP for email verification (valid for 5 minutes)
+  const otpMin = 100000;
+  const otpMax = 999999;
+  const emailOtp = crypto.randomInt(otpMin, otpMax + 1).toString();
+  const validityMinutes = 5;
+  const emailOtpExpiresAt = new Date(Date.now() + validityMinutes * 60 * 1000);
 
   const newUser = await UserModel.create({
     name: input.name,
     email: normalizedEmail,
     password: hashedPassword,
-    mobileNumber: trimmedMobile,
+    mobileNumber: trimmedMobile || undefined,
     country: input.country,
     postalCode: input.postalCode,
     profilePicture: input.profilePicture,
     role: input.role,
+    isEmailVerified: false,
+    emailVerificationOtp: emailOtp,
+    emailVerificationExpiresAt: emailOtpExpiresAt,
   });
 
-  // Automatically trigger OTP dispatch upon registration (5 min validity)
+  // Dispatch OTP email to user's Gmail
   try {
-    await sendPhoneOtpService({
-      userId: newUser._id.toString(),
-      mobileNumber: trimmedMobile,
+    await dispatchEmailVerificationOtpJob({
+      toEmail: newUser.email,
+      name: newUser.name,
+      otp: emailOtp,
+      validityMinutes,
     });
-  } catch (err) {
-    logger.warn({ err, userId: newUser._id }, "Could not send initial registration OTP SMS");
+  } catch (queueErr) {
+    logger.warn(
+      { err: queueErr, email: newUser.email },
+      "Queue dispatch failed for registration email OTP, attempting direct email send",
+    );
+
+    try {
+      await sendOtpEmail(
+        {
+          toEmail: newUser.email,
+          name: newUser.name,
+          otp: emailOtp,
+          validityMinutes,
+        },
+        "VERIFICATION",
+      );
+    } catch (emailErr) {
+      logger.error(
+        { err: emailErr, email: newUser.email },
+        "Direct email send failed for registration email OTP",
+      );
+    }
   }
 
   logger.info(
@@ -78,7 +125,7 @@ export const registerUserService = async (input: RegisterInput) => {
       email: normalizedEmail,
       role: newUser.role,
     },
-    "User registered successfully and OTP dispatched",
+    "User registered successfully and email OTP dispatched",
   );
 
   return {
@@ -99,14 +146,40 @@ export const registerUserService = async (input: RegisterInput) => {
 };
 
 export const loginUserService = async (input: LoginInput) => {
-  const trimmedMobile = input.mobileNumber.trim();
+  const rawIdentifier = (
+    input.identifier ||
+    input.email ||
+    input.mobileNumber ||
+    ""
+  ).trim();
 
-  const user = await UserModel.findOne({ mobileNumber: trimmedMobile })
-    .select("+password");
+  if (!rawIdentifier) {
+    throw new AppError(
+      "Please provide an email address or mobile number to log in",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  const isEmail = rawIdentifier.includes("@");
+  let user = null;
+
+  if (isEmail) {
+    const normalizedEmail = rawIdentifier.toLowerCase();
+    user = await UserModel.findOne({ email: normalizedEmail }).select("+password");
+  } else {
+    const formattedMobile = formatMobileNumber(rawIdentifier);
+    user = await UserModel.findOne({
+      $or: [
+        { mobileNumber: rawIdentifier },
+        { mobileNumber: formattedMobile },
+        { mobileNumber: `+${formattedMobile}` },
+      ],
+    }).select("+password");
+  }
 
   if (!user) {
     throw new AppError(
-      "Invalid mobile number or password",
+      "Invalid email/mobile number or password",
       HTTP_STATUS.UNAUTHORIZED,
     );
   }
@@ -132,7 +205,7 @@ export const loginUserService = async (input: LoginInput) => {
 
   if (!isPasswordValid) {
     throw new AppError(
-      "Invalid mobile number or password",
+      "Invalid email/mobile number or password",
       HTTP_STATUS.UNAUTHORIZED,
     );
   }
@@ -174,6 +247,7 @@ export const loginUserService = async (input: LoginInput) => {
       profilePicture: user.profilePicture,
       isActive: user.isActive,
       isEmailVerified: user.isEmailVerified,
+      isMobileVerified: user.isMobileVerified,
     },
   };
 };
@@ -487,5 +561,176 @@ export const changePasswordService = async ({
 };
 
 export const updatePasswordService = changePasswordService;
+
+export const verifyEmailService = async (input: VerifyEmailInput) => {
+  const normalizedEmail = input.email.toLowerCase().trim();
+  const trimmedOtp = input.otp.trim();
+
+  const user = await UserModel.findOne({ email: normalizedEmail }).select(
+    "+emailVerificationOtp +emailVerificationExpiresAt",
+  );
+
+  if (!user) {
+    throw new AppError("No account found with this email address", HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (user.isEmailVerified) {
+    throw new AppError("Email is already verified. Please log in.", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  if (!user.emailVerificationOtp || !user.emailVerificationExpiresAt) {
+    throw new AppError(
+      "No pending verification code found. Please request a new OTP.",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  const now = new Date();
+  const hasExpired = user.emailVerificationExpiresAt < now;
+
+  if (hasExpired) {
+    throw new AppError(
+      "Verification code has expired. Please request a new OTP.",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  const isOtpMatch = user.emailVerificationOtp === trimmedOtp;
+
+  if (!isOtpMatch) {
+    throw new AppError(
+      "Invalid verification code. Please check and try again.",
+      HTTP_STATUS.BAD_REQUEST,
+    );
+  }
+
+  user.isEmailVerified = true;
+  user.emailVerificationOtp = undefined;
+  user.emailVerificationExpiresAt = undefined;
+  await user.save();
+
+  // Generate tokens so user is immediately logged in upon email verification
+  const accessToken = generateAccessToken({
+    sub: user._id.toString(),
+    role: user.role,
+  });
+
+  const refreshToken = generateRefreshToken({
+    sub: user._id.toString(),
+  });
+
+  const expiresAt = new Date();
+  expiresAt.setDate(expiresAt.getDate() + REFRESH_TOKEN_EXPIRY_DAYS);
+
+  await RefreshTokenModel.create({
+    user: user._id,
+    token: refreshToken,
+    expiresAt,
+  });
+
+  logger.info(
+    { userId: user._id, email: user.email },
+    "Email successfully verified and auth tokens issued",
+  );
+
+  return {
+    accessToken,
+    refreshToken,
+    user: {
+      id: user._id,
+      name: user.name,
+      email: user.email,
+      role: user.role,
+      mobileNumber: user.mobileNumber,
+      country: user.country,
+      postalCode: user.postalCode,
+      profilePicture: user.profilePicture,
+      isActive: user.isActive,
+      isEmailVerified: user.isEmailVerified,
+      isMobileVerified: user.isMobileVerified,
+    },
+  };
+};
+
+export const resendEmailOtpService = async (input: ResendEmailOtpInput) => {
+  const normalizedEmail = input.email.toLowerCase().trim();
+
+  const user = await UserModel.findOne({ email: normalizedEmail }).select(
+    "+emailVerificationOtp +emailVerificationExpiresAt",
+  );
+
+  if (!user) {
+    throw new AppError("No account found with this email address", HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (user.isEmailVerified) {
+    throw new AppError("Email is already verified. Please log in.", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const now = new Date();
+  const cooldownMs = 60 * 1000;
+  const totalValidityMs = 5 * 60 * 1000;
+
+  if (user.emailVerificationExpiresAt) {
+    const remainingValidityMs = user.emailVerificationExpiresAt.getTime() - now.getTime();
+    const timeSinceSentMs = totalValidityMs - remainingValidityMs;
+
+    if (timeSinceSentMs < cooldownMs && remainingValidityMs > 0) {
+      const waitSeconds = Math.ceil((cooldownMs - timeSinceSentMs) / 1000);
+      throw new AppError(
+        `Please wait ${waitSeconds} seconds before requesting a new OTP.`,
+        HTTP_STATUS.TOO_MANY_REQUESTS,
+      );
+    }
+  }
+
+  const otpMin = 100000;
+  const otpMax = 999999;
+  const emailOtp = crypto.randomInt(otpMin, otpMax + 1).toString();
+  const validityMinutes = 5;
+  const emailOtpExpiresAt = new Date(Date.now() + validityMinutes * 60 * 1000);
+
+  user.emailVerificationOtp = emailOtp;
+  user.emailVerificationExpiresAt = emailOtpExpiresAt;
+  await user.save();
+
+  try {
+    await dispatchEmailVerificationOtpJob({
+      toEmail: user.email,
+      name: user.name,
+      otp: emailOtp,
+      validityMinutes,
+    });
+  } catch (queueErr) {
+    logger.warn(
+      { err: queueErr, email: user.email },
+      "Queue dispatch failed for resend email verification OTP, attempting direct email send",
+    );
+
+    try {
+      await sendOtpEmail(
+        {
+          toEmail: user.email,
+          name: user.name,
+          otp: emailOtp,
+          validityMinutes,
+        },
+        "VERIFICATION",
+      );
+    } catch (emailErr) {
+      logger.error(
+        { err: emailErr, email: user.email },
+        "Direct email send failed for resend email verification OTP",
+      );
+    }
+  }
+
+  logger.info({ userId: user._id, email: user.email }, "Resent email verification OTP successfully");
+
+  return {
+    success: true,
+    message: "A new verification code has been sent to your email.",
+  };
+};
 
 

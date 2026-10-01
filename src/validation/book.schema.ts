@@ -229,11 +229,7 @@ export const createBookSchema = z.object({
     .array(z.string().trim().regex(objectIdRegex, "Invalid category ID format"))
     .min(1, "A book must belong to at least one category"),
   language: z.string().trim().optional().default("English"),
-  country: z
-    .string()
-    .trim()
-    .regex(objectIdRegex, "Invalid country ID format")
-    .optional(),
+  country: z.string().trim().optional(),
   searchTags: z.array(z.string().trim()).optional().default([]),
   format: z.enum(BOOK_FORMATS).optional().default("PAPERBACK"),
   edition: z.string().trim().optional(),

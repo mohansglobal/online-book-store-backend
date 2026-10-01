@@ -31,10 +31,51 @@ import type {
   UpdateSellerOrderStatusInput,
 } from "../validation/order.schema.js";
 
-const generateOrderNumber = (): string => {
-  const timestamp = Date.now().toString(36).toUpperCase();
-  const random = Math.floor(1000 + Math.random() * 9000).toString();
-  return `ORD-${timestamp}-${random}`;
+// Rolling sequence counter (0001 to 9999) to ensure uniqueness within the same second
+let sequenceCounter = Math.floor(10 + Math.random() * 80);
+
+const getNextSequenceNumber = (): string => {
+  const current = sequenceCounter;
+  sequenceCounter = sequenceCounter >= 9999 ? 1 : sequenceCounter + 1;
+  return String(current).padStart(4, "0");
+};
+
+/**
+ * Generates a clean, human-readable, business-meaningful order identifier.
+ * Format: ORD-YYYYMMDD-HHMMSS-NNNN (e.g. ORD-20261001-115523-0042)
+ * - ORD: entity prefix (Order)
+ * - YYYYMMDD: date of order (Year, Month, Day)
+ * - HHMMSS: timestamp of order (Hours, Minutes, Seconds)
+ * - NNNN: 4-digit sequence / uniqueness number
+ */
+export const generateOrderNumber = (): string => {
+  const now = new Date();
+
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  const datePart = `${year}${month}${day}`;
+
+  const hours = String(now.getHours()).padStart(2, "0");
+  const minutes = String(now.getMinutes()).padStart(2, "0");
+  const seconds = String(now.getSeconds()).padStart(2, "0");
+  const timePart = `${hours}${minutes}${seconds}`;
+
+  const sequencePart = getNextSequenceNumber();
+
+  return `ORD-${datePart}-${timePart}-${sequencePart}`;
+};
+
+/**
+ * Generates a seller fulfillment sub-order identifier.
+ * Format: ORD-YYYYMMDD-HHMMSS-NNNN-S01 (e.g. ORD-20261001-115523-0042-S01)
+ */
+export const generateSellerOrderNumber = (
+  masterOrderNumber: string,
+  sellerIndex: number,
+): string => {
+  const formattedIndex = String(sellerIndex).padStart(2, "0");
+  return `${masterOrderNumber}-S${formattedIndex}`;
 };
 
 /**

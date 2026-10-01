@@ -51,6 +51,14 @@ const userSchema = new Schema(
       type: Boolean,
       default: false,
     },
+    emailVerificationOtp: {
+      type: String,
+      select: false,
+    },
+    emailVerificationExpiresAt: {
+      type: Date,
+      select: false,
+    },
     isMobileVerified: {
       type: Boolean,
       default: false,

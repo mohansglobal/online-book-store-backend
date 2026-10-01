@@ -6,6 +6,8 @@ import { uploadProfileImageMiddleware } from "../middlewares/upload.middleware.j
 import {
   registerSchema,
   loginSchema,
+  verifyEmailSchema,
+  resendEmailOtpSchema,
   sendOtpSchema,
   verifyOtpSchema,
   forgotPasswordSchema,
@@ -17,6 +19,8 @@ import {
 } from "../validation/auth.schema.js";
 import {
   register,
+  verifyEmail,
+  resendEmailOtp,
   login,
   refreshToken,
   getMe,
@@ -41,6 +45,10 @@ import {
 const router = Router();
 
 router.post("/register", validate(registerSchema), register);
+router.post("/verify-email", validate(verifyEmailSchema), verifyEmail);
+router.post("/email/verify-otp", validate(verifyEmailSchema), verifyEmail);
+router.post("/resend-email-otp", validate(resendEmailOtpSchema), resendEmailOtp);
+router.post("/email/send-otp", validate(resendEmailOtpSchema), resendEmailOtp);
 router.post("/login", validate(loginSchema), login);
 router.post("/refresh-token", refreshToken);
 router.get("/me", authenticate, getMe);

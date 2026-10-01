@@ -101,8 +101,8 @@ export const forgotPasswordService = async (input: ForgotPasswordInput) => {
       return {
         success: true,
         alreadySent: true,
-        message: "OTP was already sent and is still valid. Please check your inbox or phone.",
-        identifier: maskIdentifier(normalizedIdentifier),
+        message: "OTP was already sent and is still valid. Please check your email inbox.",
+        identifier: maskIdentifier(user.email),
         expiresInSeconds: remainingSeconds,
       };
     }
@@ -166,29 +166,15 @@ export const forgotPasswordService = async (input: ForgotPasswordInput) => {
     }
   }
 
-  // Dispatch OTP via SMS if mobile number exists and user requested by mobile
-  if (!isEmail && user.mobileNumber) {
-    try {
-      await sendOtpSms(user.mobileNumber, otp, {
-        validityMinutes: OTP_VALIDITY_MINUTES,
-      });
-    } catch (smsErr) {
-      logger.warn(
-        { err: smsErr, mobile: user.mobileNumber },
-        "Failed to send password reset OTP via SMS",
-      );
-    }
-  }
-
   logger.info(
-    { userId, identifier: maskIdentifier(normalizedIdentifier) },
-    "Password reset OTP generated and dispatched successfully",
+    { userId, email: user.email, maskedEmail: maskIdentifier(user.email) },
+    "Password reset OTP generated and dispatched via email successfully",
   );
 
   return {
     success: true,
-    message: "Password reset OTP sent successfully",
-    identifier: maskIdentifier(normalizedIdentifier),
+    message: "Password reset code sent to your registered email address",
+    identifier: maskIdentifier(user.email),
     expiresInSeconds: OTP_VALIDITY_MINUTES * 60,
   };
 };

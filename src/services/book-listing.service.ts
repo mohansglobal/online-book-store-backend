@@ -9,6 +9,7 @@ import { CategoryModel } from "../models/category.model.js";
 import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CountryModel } from "../models/country.model.js";
+import { resolveCountryId } from "./country.service.js";
 import { OrderModel } from "../models/order.model.js";
 import { ReviewModel } from "../models/review.model.js";
 import {
@@ -1467,6 +1468,7 @@ export const createBookListingService = async (
 
     const baseSlug = slugify(input.title) || "-";
     const uniqueSlug = `${baseSlug}-${Date.now().toString(36)}`;
+    const resolvedCountryId = await resolveCountryId(input.country);
     const bookPrice = Math.round(input.mrpInPaise / 100);
 
     const newBook = new BookModel({
@@ -1477,7 +1479,7 @@ export const createBookListingService = async (
       publisher: input.publisher ? new mongoose.Types.ObjectId(input.publisher) : undefined,
       authors: input.authors ? input.authors.map((id) => new mongoose.Types.ObjectId(id)) : [],
       categories: input.categories ? input.categories.map((id) => new mongoose.Types.ObjectId(id)) : [],
-      country: input.country ? new mongoose.Types.ObjectId(input.country) : undefined,
+      country: resolvedCountryId,
       language: input.language || "-",
       description: input.description || "",
       coverImage: input.coverImage || "",

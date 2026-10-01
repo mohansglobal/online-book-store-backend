@@ -5,13 +5,12 @@ import { sendOtpSms, formatMobileNumber } from "./sms.service.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
+import { IS_MAIL_ONLY_AUTH } from "../constants/auth.js";
 
 const OTP_VALIDITY_MINUTES = 5;
-const OTP_RESEND_COOLDOWN_MS = 5*60 * 1000; // 1 minute cooldown
-
+const OTP_RESEND_COOLDOWN_MS = 5 * 60 * 1000; // 1 minute cooldown
 
 //Generates a crypto-secure 6-digit numeric OTP string.
- 
 export const generateOtp = (length = 6): string => {
   const min = Math.pow(10, length - 1);
   const max = Math.pow(10, length) - 1;
@@ -130,6 +129,20 @@ export const verifyPhoneOtpService = async ({
 
   if (!trimmedOtp) {
     throw new AppError("OTP is required", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  // Under MAIL mode, phone verification auto-succeeds for any number/OTP
+  if (IS_MAIL_ONLY_AUTH) {
+    if (userId || targetMobile) {
+      const userFilter = userId ? { _id: userId } : { mobileNumber: targetMobile };
+      await UserModel.updateOne(userFilter, {
+        $set: { isMobileVerified: true },
+      });
+    }
+    return {
+      success: true,
+      message: "Phone number verified successfully (MAIL mode active)",
+    };
   }
 
   const query: any = {};

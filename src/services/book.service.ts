@@ -12,6 +12,7 @@ import { AuthorModel } from "../models/author.model.js";
 import { PublisherModel } from "../models/publisher.model.js";
 import { CategoryModel } from "../models/category.model.js";
 import { CountryModel } from "../models/country.model.js";
+import { resolveCountryId } from "./country.service.js";
 import {
   getBatchListingRatingStats,
   getListingRatingFromMap,
@@ -524,16 +525,8 @@ export const createBookService = async (
     throw new AppError("One or more referenced categories do not exist or are inactive", HTTP_STATUS.BAD_REQUEST);
   }
 
-  // 3b. Validate country if provided
-  if (input.country) {
-    const countryExists = await CountryModel.exists({
-      _id: input.country,
-      isActive: true,
-    });
-    if (!countryExists) {
-      throw new AppError("Referenced country does not exist or is inactive", HTTP_STATUS.BAD_REQUEST);
-    }
-  }
+  // 3b. Resolve country (supports ObjectId, country name like "India", or code like "IN")
+  const resolvedCountryId = await resolveCountryId(input.country);
 
   // 4. Validate International ISBN Agency standards
   await validateIsbnStandards(input.isbn, {
@@ -607,7 +600,7 @@ export const createBookService = async (
     authors: input.authors.map((id) => new mongoose.Types.ObjectId(id)),
     publisher: new mongoose.Types.ObjectId(input.publisher),
     categories: input.categories.map((id) => new mongoose.Types.ObjectId(id)),
-    country: input.country ? new mongoose.Types.ObjectId(input.country) : undefined,
+    country: resolvedCountryId,
     language: input.language,
     searchTags: input.searchTags,
     format: input.format,
@@ -683,15 +676,9 @@ export const updateBookService = async (
     book.categories = input.categories.map((catId) => new mongoose.Types.ObjectId(catId)) as unknown as typeof book.categories;
   }
 
-  if (input.country) {
-    const countryExists = await CountryModel.exists({
-      _id: input.country,
-      isActive: true,
-    });
-    if (!countryExists) {
-      throw new AppError("Referenced country does not exist or is inactive", HTTP_STATUS.BAD_REQUEST);
-    }
-    book.country = new mongoose.Types.ObjectId(input.country);
+  if (input.country !== undefined) {
+    const resolvedCountryId = await resolveCountryId(input.country);
+    book.country = resolvedCountryId as unknown as typeof book.country;
   }
 
   const resolvedIsbn = input.isbn !== undefined ? (input.isbn ? input.isbn.trim() : undefined) : book.isbn;
