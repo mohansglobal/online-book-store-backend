@@ -509,6 +509,17 @@ const seedBooks = async () => {
           });
         }
         categoryIds.push(catDoc._id);
+
+        if (catSlug === "mathematics-science-and-technology" || catSlug === "text-book") {
+          const companionSlug =
+            catSlug === "mathematics-science-and-technology"
+              ? "text-book"
+              : "mathematics-science-and-technology";
+          const companionCat = await CategoryModel.findOne({ slug: companionSlug });
+          if (companionCat && !categoryIds.some((id) => id.equals(companionCat._id))) {
+            categoryIds.push(companionCat._id);
+          }
+        }
       } else {
         categoryIds.push(fallbackCategory._id);
         recordAnomaly(
@@ -579,8 +590,11 @@ const seedBooks = async () => {
       // ==========================================
       // INDIA MARKETPLACE LISTING CREATION
       // ==========================================
-      if (rawPriceIn > 0) {
-        const sellingPriceInPaise = Math.round(rawPriceIn * 100);
+      const rawPrice = parseFloat(p.price || "0");
+      const effectivePriceIn = rawPriceIn > 0 ? rawPriceIn : rawPrice > 0 ? rawPrice : 0;
+
+      if (effectivePriceIn > 0) {
+        const sellingPriceInPaise = Math.round(effectivePriceIn * 100);
         let mrpInPaise = sellingPriceInPaise;
 
         if (rawDiscountIn > 0 && rawDiscountIn < 100) {

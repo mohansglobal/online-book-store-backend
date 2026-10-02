@@ -10,6 +10,7 @@ import { CHECKOUT_CONFIG, ACTIVE_PROMO_RULES } from "../constants/checkout.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
+import { resolveListingPricing } from "../utils/pricing.util.js";
 import { env } from "../config/env.js";
 import {
   verifyRazorpaySignature,
@@ -45,7 +46,7 @@ const getNextSequenceNumber = (): string => {
  * Format: ORD-YYYYMMDD-HHMMSS-NNNN (e.g. ORD-20261001-115523-0042)
  * - ORD: entity prefix (Order)
  * - YYYYMMDD: date of order (Year, Month, Day)
- * - HHMMSS: timestamp of order (Hours, Minutes, Seconds)
+ * - HHMMSS: timestamp of order (Hours, Minutes, Seconds)0.
  * - NNNN: 4-digit sequence / uniqueness number
  */
 export const generateOrderNumber = (): string => {
@@ -438,7 +439,8 @@ export const createOrderService = async (
       );
     }
 
-    const priceInPaise = updatedListing.sellingPriceInPaise;
+    const pricing = resolveListingPricing(updatedListing);
+    const priceInPaise = pricing.effectivePriceInPaise;
     const subtotalInPaise = priceInPaise * item.quantity;
 
     acquiredItems.push({

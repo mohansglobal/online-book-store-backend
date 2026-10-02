@@ -34,8 +34,11 @@ import {
   type MyBookListingQueryInput,
   type UpdateStockInput,
   type ApplyListingDiscountInput,
+  type BulkApplyDiscountInput,
+  type BulkRemoveDiscountInput,
 } from "../validation/book-listing.schema.js";
 import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
+import { resolveListingPricing } from "../utils/pricing.util.js";
 
 const objectIdRegex = /^[0-9a-fA-F]{24}$/;
 
@@ -251,14 +254,16 @@ export const getThisWeekBestsellersService = async (
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
 
-    const mrpInPaise = listing.mrpInPaise ?? 0;
-    const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
-    const mrp = Math.round(mrpInPaise / 100);
-    const price = Math.round(sellingPriceInPaise / 100);
-    const discountPercentage =
-      mrpInPaise > 0
-        ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
-        : 0;
+    const pricing = resolveListingPricing(listing);
+    const mrpInPaise = pricing.mrpInPaise;
+    const sellingPriceInPaise = pricing.sellingPriceInPaise;
+    const effectivePriceInPaise = pricing.effectivePriceInPaise;
+    const mrp = pricing.mrp;
+    const price = pricing.price;
+    const discountPercentage = pricing.discountPercentage;
+    const discountStatus = pricing.discountStatus;
+    const isDiscountActive = pricing.isDiscountActive;
+    const activeDiscount = pricing.activeDiscount;
 
     const bookIdString = bookId?.toString() || "";
     const salesInfo = salesMap.get(bookIdString);
@@ -324,11 +329,14 @@ export const getThisWeekBestsellersService = async (
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
       price,
-      priceInPaise: sellingPriceInPaise,
+      priceInPaise: effectivePriceInPaise,
       mrp,
       mrpInPaise,
       sellingPriceInPaise,
       discountPercentage,
+      discountStatus,
+      isDiscountActive,
+      activeDiscount,
       rating: ratingInfo.rating,
       ratings: ratingInfo.rating,
       averageRating: ratingInfo.averageRating,
@@ -693,14 +701,16 @@ export const getPopularNovelsService = async (
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
 
-    const mrpInPaise = listing.mrpInPaise ?? 0;
-    const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
-    const mrp = Math.round(mrpInPaise / 100);
-    const price = Math.round(sellingPriceInPaise / 100);
-    const discountPercentage =
-      mrpInPaise > 0
-        ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
-        : 0;
+    const pricing = resolveListingPricing(listing);
+    const mrpInPaise = pricing.mrpInPaise;
+    const sellingPriceInPaise = pricing.sellingPriceInPaise;
+    const effectivePriceInPaise = pricing.effectivePriceInPaise;
+    const mrp = pricing.mrp;
+    const price = pricing.price;
+    const discountPercentage = pricing.discountPercentage;
+    const discountStatus = pricing.discountStatus;
+    const isDiscountActive = pricing.isDiscountActive;
+    const activeDiscount = pricing.activeDiscount;
 
     const bookIdString = bookId ? bookId.toString() : "";
     const scoreData = scoresByBookId.get(bookIdString);
@@ -766,11 +776,14 @@ export const getPopularNovelsService = async (
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
       price,
-      priceInPaise: sellingPriceInPaise,
+      priceInPaise: effectivePriceInPaise,
       mrp,
       mrpInPaise,
       sellingPriceInPaise,
       discountPercentage,
+      discountStatus,
+      isDiscountActive,
+      activeDiscount,
       rating: ratingInfo.rating,
       ratings: ratingInfo.rating,
       averageRating: ratingInfo.averageRating,
@@ -855,11 +868,33 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
         { slug: { $in: query.category.map((s) => s.toLowerCase()) } },
       ],
     })
-      .select("_id")
+      .select("_id slug")
       .lean();
-    const allCatIds = Array.from(
+    let allCatIds = Array.from(
       new Set([...validIds, ...matchedCategories.map((c) => c._id.toString())]),
     );
+
+    const isTextbookOrSciTech =
+      allCatIds.includes("6a9eb5b4463e5a288a801273") ||
+      matchedCategories.some(
+        (c) =>
+          c.slug === "mathematics-science-and-technology" ||
+          c.slug === "text-book",
+      );
+
+    if (isTextbookOrSciTech) {
+      const relatedCats = await CategoryModel.find({
+        slug: { $in: ["mathematics-science-and-technology", "text-book"] },
+      })
+        .select("_id")
+        .lean();
+
+      for (const rc of relatedCats) {
+        allCatIds.push(rc._id.toString());
+      }
+      allCatIds = Array.from(new Set(allCatIds));
+    }
+
     bookFilter.categories = { $in: allCatIds };
   }
 
@@ -970,7 +1005,18 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
   const isTitleSort = query.sortBy === "title";
   const sortField = isTitleSort ? "bookDoc.title" : query.sortBy;
 
-  const shouldShuffleHomepage = query.homepage && !query.hasExplicitSort;
+  const isTextbookQuery =
+    (query.category?.includes("6a9eb5b4463e5a288a801273") ||
+      query.category?.some(
+        (cat) =>
+          cat.toLowerCase() === "mathematics-science-and-technology" ||
+          cat.toLowerCase() === "text-book",
+      )) &&
+    limit === 1;
+
+  const shouldShuffleHomepage =
+    (query.homepage || (query.homesection && limit === 1) || isTextbookQuery) &&
+    !query.hasExplicitSort;
 
   if (shouldShuffleHomepage) {
     const aggregatePipeline: any[] = [
@@ -1224,14 +1270,16 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
     const sellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const ratingInfo = getListingRatingFromMap(ratingMap, bookId, sellerId);
 
-    const mrpInPaise = listing.mrpInPaise ?? 0;
-    const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
-    const mrp = Math.round(mrpInPaise / 100);
-    const price = Math.round(sellingPriceInPaise / 100);
-    const discountPercentage =
-      mrpInPaise > 0
-        ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
-        : 0;
+    const pricing = resolveListingPricing(listing);
+    const mrpInPaise = pricing.mrpInPaise;
+    const sellingPriceInPaise = pricing.sellingPriceInPaise;
+    const effectivePriceInPaise = pricing.effectivePriceInPaise;
+    const mrp = pricing.mrp;
+    const price = pricing.price;
+    const discountPercentage = pricing.discountPercentage;
+    const discountStatus = pricing.discountStatus;
+    const isDiscountActive = pricing.isDiscountActive;
+    const activeDiscount = pricing.activeDiscount;
 
     const bookTitle = bookObj?.title || "";
     const bookTitleBn = bookObj?.titleBn || "";
@@ -1294,11 +1342,14 @@ export const getBookListingsService = async (query: BookListingQueryInput) => {
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
       price,
-      priceInPaise: sellingPriceInPaise,
+      priceInPaise: effectivePriceInPaise,
       mrp,
       mrpInPaise,
       sellingPriceInPaise,
       discountPercentage,
+      discountStatus,
+      isDiscountActive,
+      activeDiscount,
       rating: ratingInfo.rating,
       ratings: ratingInfo.rating,
       averageRating: ratingInfo.averageRating,
@@ -1391,24 +1442,29 @@ export const getBookListingByIdService = async (
     isWishlisted = Boolean(exists);
   }
 
-  const mrpInPaise = listing.mrpInPaise ?? 0;
-  const sellingPriceInPaise = listing.sellingPriceInPaise ?? 0;
-  const mrp = Math.round(mrpInPaise / 100);
-  const price = Math.round(sellingPriceInPaise / 100);
-  const discountPercentage =
-    mrpInPaise > 0
-      ? Math.round(((mrpInPaise - sellingPriceInPaise) / mrpInPaise) * 100)
-      : 0;
+  const pricing = resolveListingPricing(listing);
+  const mrpInPaise = pricing.mrpInPaise;
+  const sellingPriceInPaise = pricing.sellingPriceInPaise;
+  const effectivePriceInPaise = pricing.effectivePriceInPaise;
+  const mrp = pricing.mrp;
+  const price = pricing.price;
+  const discountPercentage = pricing.discountPercentage;
+  const discountStatus = pricing.discountStatus;
+  const isDiscountActive = pricing.isDiscountActive;
+  const activeDiscount = pricing.activeDiscount;
 
   return {
     ...listing,
     isWishlisted,
     price,
-    priceInPaise: sellingPriceInPaise,
+    priceInPaise: effectivePriceInPaise,
     mrp,
     mrpInPaise,
     sellingPriceInPaise,
     discountPercentage,
+    discountStatus,
+    isDiscountActive,
+    activeDiscount,
     coverImage: resolvedImages.coverImage,
     images: resolvedImages.images,
     effectiveImages: resolvedImages.effectiveImages,
@@ -1574,6 +1630,45 @@ export const updateBookListingService = async (
     );
   }
 
+  // Handle explicit seller choice regarding discounts
+  if (input.clearDiscount || input.discountAction === "REMOVE" || input.discountSchedule === null) {
+    listing.discountSchedule = null;
+  } else if (input.discountSchedule) {
+    // Validate new discount schedule provided in edit payload
+    const newSchedule = input.discountSchedule;
+    let newDiscountPaise = 0;
+
+    if (newSchedule.discountType === "PERCENTAGE") {
+      if (newSchedule.discountValue > 100) {
+        throw new AppError("Percentage discount cannot exceed 100%", HTTP_STATUS.BAD_REQUEST);
+      }
+      newDiscountPaise = Math.round((targetMrp * newSchedule.discountValue) / 100);
+    } else {
+      newDiscountPaise = Math.round(newSchedule.discountValue * 100);
+      if (newDiscountPaise > targetMrp) {
+        throw new AppError("Flat discount amount cannot exceed MRP", HTTP_STATUS.BAD_REQUEST);
+      }
+    }
+
+    listing.discountSchedule = {
+      discountType: newSchedule.discountType,
+      discountValue: newSchedule.discountValue,
+      startDate: newSchedule.startDate ? new Date(newSchedule.startDate) : null,
+      endDate: newSchedule.endDate ? new Date(newSchedule.endDate) : null,
+      isActive: true,
+      campaignName: newSchedule.campaignName,
+    };
+  } else if (listing.discountSchedule && listing.discountSchedule.discountType === "FLAT") {
+    // If flat discount already exists on listing, validate that it does not exceed the new target MRP
+    const flatDiscountPaise = Math.round(listing.discountSchedule.discountValue * 100);
+    if (flatDiscountPaise > targetMrp) {
+      throw new AppError(
+        `Active flat discount of ₹${listing.discountSchedule.discountValue} exceeds the new MRP of ₹${targetMrp / 100}. Please update or remove the discount schedule.`,
+        HTTP_STATUS.BAD_REQUEST,
+      );
+    }
+  }
+
   if (input.mrpInPaise !== undefined) listing.mrpInPaise = input.mrpInPaise;
   if (input.sellingPriceInPaise !== undefined)
     listing.sellingPriceInPaise = input.sellingPriceInPaise;
@@ -1581,6 +1676,102 @@ export const updateBookListingService = async (
   if (input.sku !== undefined) listing.sku = input.sku;
   if (input.listingImages !== undefined) listing.listingImages = input.listingImages;
   if (input.isActive !== undefined) listing.isActive = input.isActive;
+
+  // Update canonical book details if book metadata is included in edit payload
+  const hasBookFields =
+    input.isbn !== undefined ||
+    input.title !== undefined ||
+    input.titleBn !== undefined ||
+    input.description !== undefined ||
+    input.authors !== undefined ||
+    input.publisher !== undefined ||
+    input.categories !== undefined ||
+    input.format !== undefined ||
+    input.edition !== undefined ||
+    input.language !== undefined ||
+    input.coverImage !== undefined ||
+    input.images !== undefined ||
+    input.searchTags !== undefined ||
+    input.pages !== undefined ||
+    input.country !== undefined;
+
+  if (hasBookFields && listing.book) {
+    const bookId = (listing.book as { _id?: unknown })?._id || listing.book;
+    const book = await BookModel.findById(bookId);
+    if (book) {
+      if (input.publisher) {
+        const publisherExists = await PublisherModel.exists({
+          _id: input.publisher,
+          isActive: true,
+        });
+        if (!publisherExists) {
+          throw new AppError("Referenced publisher does not exist or is inactive", HTTP_STATUS.BAD_REQUEST);
+        }
+        book.publisher = new mongoose.Types.ObjectId(input.publisher);
+      }
+
+      if (input.authors) {
+        const authorCount = await AuthorModel.countDocuments({
+          _id: { $in: input.authors },
+          isActive: true,
+          isDel: { $ne: true },
+        });
+        if (authorCount !== input.authors.length) {
+          throw new AppError("One or more referenced authors do not exist or are inactive", HTTP_STATUS.BAD_REQUEST);
+        }
+        book.authors = input.authors.map((id) => new mongoose.Types.ObjectId(id)) as unknown as typeof book.authors;
+      }
+
+      if (input.categories) {
+        const categoryCount = await CategoryModel.countDocuments({
+          _id: { $in: input.categories },
+          isActive: true,
+        });
+        if (categoryCount !== input.categories.length) {
+          throw new AppError("One or more referenced categories do not exist or are inactive", HTTP_STATUS.BAD_REQUEST);
+        }
+        book.categories = input.categories.map((id) => new mongoose.Types.ObjectId(id)) as unknown as typeof book.categories;
+      }
+
+      if (input.country !== undefined) {
+        const resolvedCountryId = await resolveCountryId(input.country);
+        book.country = resolvedCountryId as unknown as typeof book.country;
+      }
+
+      if (input.isbn !== undefined) {
+        const nextIsbn = input.isbn ? input.isbn.trim() : "";
+        if (nextIsbn) {
+          await validateIsbnStandards(nextIsbn, {
+            publisher: input.publisher || book.publisher,
+            format: input.format || book.format,
+            language: input.language || book.language,
+            edition: input.edition !== undefined ? input.edition : book.edition,
+            excludeBookId: book._id,
+          });
+          book.isbn = nextIsbn;
+        } else {
+          book.isbn = "";
+          book.set("isbn", undefined);
+        }
+      }
+      if (input.title !== undefined) book.title = input.title;
+      if (input.titleBn !== undefined) book.titleBn = input.titleBn;
+      if (input.description !== undefined) book.description = input.description;
+      if (input.language !== undefined) book.language = input.language;
+      if (input.searchTags !== undefined) book.searchTags = input.searchTags;
+      if (input.format !== undefined) book.format = input.format as typeof book.format;
+      if (input.edition !== undefined) book.edition = input.edition;
+      if (input.pages !== undefined) book.pages = input.pages;
+      if (input.coverImage !== undefined) book.coverImage = input.coverImage;
+      if (input.images !== undefined) book.images = input.images;
+
+      const newBookMrp = Math.round(targetMrp / 100);
+      book.price = newBookMrp;
+      book.priceIn = newBookMrp;
+
+      await book.save();
+    }
+  }
 
   await listing.save();
 
@@ -1601,7 +1792,7 @@ export const deleteBookListingService = async (
   if (!listing) {
     throw new AppError("Book listing not found", HTTP_STATUS.NOT_FOUND);
   }
-
+  
   // Verify ownership
   if (userContext.role !== "ADMIN" && listing.seller.toString() !== userContext.id) {
     throw new AppError(
@@ -1761,8 +1952,19 @@ export const getMyBookListingsService = async (
     const itemSellerId = (listing.seller as { _id?: unknown })?._id || listing.seller;
     const ratingInfo = getListingRatingFromMap(ratingMap, bookId, itemSellerId);
 
+    const pricing = resolveListingPricing(listing);
+
     return {
       ...listing,
+      price: pricing.price,
+      priceInPaise: pricing.effectivePriceInPaise,
+      mrp: pricing.mrp,
+      mrpInPaise: pricing.mrpInPaise,
+      sellingPriceInPaise: pricing.sellingPriceInPaise,
+      discountPercentage: pricing.discountPercentage,
+      discountStatus: pricing.discountStatus,
+      isDiscountActive: pricing.isDiscountActive,
+      activeDiscount: pricing.activeDiscount,
       coverImage: resolvedImages.coverImage,
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
@@ -2037,12 +2239,26 @@ export const applyListingDiscountService = async (
     );
   }
 
-  // 3. Calculate new selling price
-  const newSellingPriceInPaise = mrpInPaise - discountAmountInPaise;
+  // 3. Check if this is a date-wise scheduled discount or a permanent price update
+  const hasSchedule = Boolean(input.startDate || input.endDate);
 
-  // 4. Update and persist listing
   listing.mrpInPaise = mrpInPaise;
-  listing.sellingPriceInPaise = newSellingPriceInPaise;
+
+  if (hasSchedule) {
+    listing.discountSchedule = {
+      discountType,
+      discountValue,
+      startDate: input.startDate ? new Date(input.startDate) : null,
+      endDate: input.endDate ? new Date(input.endDate) : null,
+      isActive: true,
+      campaignName: input.campaignName,
+    };
+  } else {
+    // Immediate permanent price update
+    const newSellingPriceInPaise = mrpInPaise - discountAmountInPaise;
+    listing.sellingPriceInPaise = newSellingPriceInPaise;
+    listing.discountSchedule = null;
+  }
 
   await listing.save();
 
@@ -2050,16 +2266,140 @@ export const applyListingDiscountService = async (
     {
       listingId: listing._id,
       mrpInPaise,
-      newSellingPriceInPaise,
       discountType,
       discountValue,
       discountAmountInPaise,
+      hasSchedule,
+      startDate: input.startDate,
+      endDate: input.endDate,
     },
-    "Listing discount applied and selling price updated successfully",
+    "Listing discount applied successfully",
   );
 
   return listing;
 };
+
+export const removeListingDiscountService = async (
+  listingId: string,
+  userContext: { id: string; role: string },
+) => {
+  const isValidId = mongoose.Types.ObjectId.isValid(listingId);
+  if (!isValidId) {
+    throw new AppError("Invalid listing ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const listing = await BookListingModel.findById(listingId);
+  if (!listing) {
+    throw new AppError("Book listing not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  const isOwner = listing.seller.toString() === userContext.id;
+  const isAdmin = userContext.role === "ADMIN";
+
+  if (!isOwner && !isAdmin) {
+    throw new AppError(
+      "Forbidden: You do not own this book listing",
+      HTTP_STATUS.FORBIDDEN,
+    );
+  }
+
+  listing.discountSchedule = null;
+  await listing.save();
+
+  logger.info(
+    { listingId: listing._id, userId: userContext.id },
+    "Listing scheduled discount removed successfully",
+  );
+
+  return listing;
+};
+
+export const bulkApplyListingDiscountService = async (
+  userContext: { id: string; role: string },
+  input: BulkApplyDiscountInput,
+) => {
+  const filter: Record<string, unknown> = {};
+
+  if (userContext.role !== "ADMIN") {
+    filter.seller = new mongoose.Types.ObjectId(userContext.id);
+  }
+
+  if (input.targetType === "SPECIFIC" && input.listingIds && input.listingIds.length > 0) {
+    filter._id = {
+      $in: input.listingIds.map((id) => new mongoose.Types.ObjectId(id)),
+    };
+  }
+
+  const discountSchedule = {
+    discountType: input.discountType,
+    discountValue: input.discountValue,
+    startDate: input.startDate ? new Date(input.startDate) : null,
+    endDate: input.endDate ? new Date(input.endDate) : null,
+    isActive: true,
+    campaignName: input.campaignName,
+  };
+
+  const result = await BookListingModel.updateMany(filter, {
+    $set: { discountSchedule },
+  });
+
+  logger.info(
+    {
+      userId: userContext.id,
+      targetType: input.targetType,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+      discountType: input.discountType,
+      discountValue: input.discountValue,
+      startDate: input.startDate,
+      endDate: input.endDate,
+    },
+    "Bulk discount applied successfully to book listings",
+  );
+
+  return {
+    matchedCount: result.matchedCount,
+    modifiedCount: result.modifiedCount,
+    discountSchedule,
+  };
+};
+
+export const bulkRemoveListingDiscountService = async (
+  userContext: { id: string; role: string },
+  input: BulkRemoveDiscountInput,
+) => {
+  const filter: Record<string, unknown> = {};
+
+  if (userContext.role !== "ADMIN") {
+    filter.seller = new mongoose.Types.ObjectId(userContext.id);
+  }
+
+  if (input.targetType === "SPECIFIC" && input.listingIds && input.listingIds.length > 0) {
+    filter._id = {
+      $in: input.listingIds.map((id) => new mongoose.Types.ObjectId(id)),
+    };
+  }
+
+  const result = await BookListingModel.updateMany(filter, {
+    $set: { discountSchedule: null },
+  });
+
+  logger.info(
+    {
+      userId: userContext.id,
+      targetType: input.targetType,
+      matchedCount: result.matchedCount,
+      modifiedCount: result.modifiedCount,
+    },
+    "Bulk discount removed successfully from book listings",
+  );
+
+  return {
+    matchedCount: result.matchedCount,
+    modifiedCount: result.modifiedCount,
+  };
+};
+
 
 
 

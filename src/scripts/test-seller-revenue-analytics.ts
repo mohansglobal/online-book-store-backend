@@ -367,12 +367,22 @@ const runRevenueAnalyticsTests = async () => {
       throw new Error(`Expected 1 order with 1500 AOV, got ${JSON.stringify(data.metrics)}`);
     }
 
-    // Check Trend points (7 days)
-    if (!Array.isArray(data.trend.points) || data.trend.points.length !== 7) {
-      throw new Error(`Expected 7 trend points, got ${data.trend.points?.length}`);
+    // Check Trend points (28-31 daily points for the month)
+    if (!Array.isArray(data.trend.points) || data.trend.points.length < 28 || data.trend.points.length > 31) {
+      throw new Error(`Expected 28-31 daily trend points for month, got ${data.trend.points?.length}`);
     }
 
-    console.log("✅ Test 3 Passed: Seller A monthly revenue correctly calculated with 50% growth & multi-vendor isolation");
+    // Check Trend Total matches Monthly Total Revenue
+    if (data.trend.trendTotalInRupees !== 1500) {
+      throw new Error(`Expected trendTotalInRupees 1500, got ${data.trend.trendTotalInRupees}`);
+    }
+
+    // Check Trend Subtitle contains month and year
+    if (!data.trend.subtitle || data.trend.subtitle === "Last 7 days") {
+      throw new Error(`Expected monthly subtitle like 'October 2026', got '${data.trend.subtitle}'`);
+    }
+
+    console.log("✅ Test 3 Passed: Seller A monthly revenue correctly calculated with 50% growth, 1-31 day points, matching trend total & multi-vendor isolation");
 
     // =======================================================
     // Test 4: Yearly Timeframe Verification

@@ -56,6 +56,37 @@ const bookListingSchema = new Schema(
       type: [String],
       default: [],
     },
+    discountSchedule: {
+      type: {
+        discountType: {
+          type: String,
+          enum: ["PERCENTAGE", "FLAT"],
+          required: true,
+        },
+        discountValue: {
+          type: Number,
+          required: true,
+          min: 0,
+        },
+        startDate: {
+          type: Date,
+          default: null,
+        },
+        endDate: {
+          type: Date,
+          default: null,
+        },
+        isActive: {
+          type: Boolean,
+          default: true,
+        },
+        campaignName: {
+          type: String,
+          trim: true,
+        },
+      },
+      default: null,
+    },
     isActive: {
       type: Boolean,
       default: true,
@@ -70,12 +101,71 @@ const bookListingSchema = new Schema(
 );
 
 bookListingSchema.virtual("price").get(function () {
+  const schedule = this.discountSchedule;
+  const now = Date.now();
+
+  if (
+    schedule &&
+    schedule.isActive !== false &&
+    schedule.discountValue > 0
+  ) {
+    const startTime = schedule.startDate ? new Date(schedule.startDate).getTime() : null;
+    const endTime = schedule.endDate ? new Date(schedule.endDate).getTime() : null;
+
+    const isStarted = startTime === null || now >= startTime;
+    const isEnded = endTime !== null && now > endTime;
+
+    if (isStarted && !isEnded) {
+      const mrpInPaise = this.mrpInPaise || 0;
+      let discountAmountInPaise = 0;
+
+      if (schedule.discountType === "PERCENTAGE") {
+        discountAmountInPaise = Math.round((mrpInPaise * schedule.discountValue) / 100);
+      } else {
+        discountAmountInPaise = Math.round(schedule.discountValue * 100);
+      }
+
+      discountAmountInPaise = Math.min(discountAmountInPaise, mrpInPaise);
+      const discountedInPaise = Math.max(0, mrpInPaise - discountAmountInPaise);
+      return Math.round(discountedInPaise / 100);
+    }
+  }
+
   return typeof this.sellingPriceInPaise === "number"
     ? Math.round(this.sellingPriceInPaise / 100)
     : 0;
 });
 
 bookListingSchema.virtual("priceInPaise").get(function () {
+  const schedule = this.discountSchedule;
+  const now = Date.now();
+
+  if (
+    schedule &&
+    schedule.isActive !== false &&
+    schedule.discountValue > 0
+  ) {
+    const startTime = schedule.startDate ? new Date(schedule.startDate).getTime() : null;
+    const endTime = schedule.endDate ? new Date(schedule.endDate).getTime() : null;
+
+    const isStarted = startTime === null || now >= startTime;
+    const isEnded = endTime !== null && now > endTime;
+
+    if (isStarted && !isEnded) {
+      const mrpInPaise = this.mrpInPaise || 0;
+      let discountAmountInPaise = 0;
+
+      if (schedule.discountType === "PERCENTAGE") {
+        discountAmountInPaise = Math.round((mrpInPaise * schedule.discountValue) / 100);
+      } else {
+        discountAmountInPaise = Math.round(schedule.discountValue * 100);
+      }
+
+      discountAmountInPaise = Math.min(discountAmountInPaise, mrpInPaise);
+      return Math.max(0, mrpInPaise - discountAmountInPaise);
+    }
+  }
+
   return this.sellingPriceInPaise ?? 0;
 });
 
@@ -87,9 +177,30 @@ bookListingSchema.virtual("mrp").get(function () {
 
 bookListingSchema.virtual("discountPercentage").get(function () {
   if (!this.mrpInPaise || this.mrpInPaise <= 0) return 0;
+
+  const effectiveSellingInPaise = (this as any).priceInPaise ?? this.sellingPriceInPaise ?? 0;
   return Math.round(
-    ((this.mrpInPaise - this.sellingPriceInPaise) / this.mrpInPaise) * 100,
+    ((this.mrpInPaise - effectiveSellingInPaise) / this.mrpInPaise) * 100,
   );
+});
+
+bookListingSchema.virtual("discountStatus").get(function () {
+  const schedule = this.discountSchedule;
+  if (!schedule || schedule.isActive === false || !schedule.discountValue) {
+    return "NONE";
+  }
+
+  const now = Date.now();
+  const startTime = schedule.startDate ? new Date(schedule.startDate).getTime() : null;
+  const endTime = schedule.endDate ? new Date(schedule.endDate).getTime() : null;
+
+  if (startTime !== null && now < startTime) {
+    return "UPCOMING";
+  }
+  if (endTime !== null && now > endTime) {
+    return "EXPIRED";
+  }
+  return "ACTIVE";
 });
 
 bookListingSchema.virtual("effectiveImages").get(function (this: {

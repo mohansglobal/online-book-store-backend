@@ -11,6 +11,7 @@ import {
   CHECKOUT_CONFIG,
   ACTIVE_PROMO_RULES,
 } from "../constants/checkout.js";
+import { resolveListingPricing } from "../utils/pricing.util.js";
 import type { CheckoutSummaryQuery } from "../validation/checkout.schema.js";
 import type {
   CheckoutItem,
@@ -130,8 +131,9 @@ export const getCheckoutSummaryService = async (
       });
     }
 
-    const mrp = listing?.mrpInPaise ?? listing?.sellingPriceInPaise ?? 0;
-    const sellingPrice = listing?.sellingPriceInPaise ?? 0;
+    const pricing = listing ? resolveListingPricing(listing) : null;
+    const mrp = pricing?.mrpInPaise ?? listing?.mrpInPaise ?? listing?.sellingPriceInPaise ?? 0;
+    const sellingPrice = pricing?.effectivePriceInPaise ?? listing?.sellingPriceInPaise ?? 0;
     const itemSubtotal = sellingPrice * checkoutItem.quantity;
     const itemDiscount = Math.max(0, (mrp - sellingPrice) * checkoutItem.quantity);
 
@@ -331,7 +333,7 @@ export const getCheckoutSummaryService = async (
     0,
     subtotalInPaise + deliveryChargeInPaise - couponDiscountInPaise,
   );
-
+  
   const pricing: CheckoutPricing = {
     itemsCount: availableItemsCount,
     totalQuantity,

@@ -17,6 +17,8 @@ import {
   updateStockSchema,
   toggleBookListingStatusSchema,
   applyListingDiscountSchema,
+  bulkApplyDiscountSchema,
+  bulkRemoveDiscountSchema,
 } from "../validation/book-listing.schema.js";
 import {
   getBookListings,
@@ -30,6 +32,9 @@ import {
   toggleBookListingStatus,
   deleteBookListing,
   applyListingDiscount,
+  removeListingDiscount,
+  bulkApplyListingDiscount,
+  bulkRemoveListingDiscount,
 } from "../controllers/book-listing.controller.js";
 
 const router = Router();
@@ -54,6 +59,22 @@ router.get(
   authorize("SELLER", "ADMIN"),
   validate(myBookListingQuerySchema, "query"),
   getMyBookListings,
+);
+
+router.post(
+  "/discounts/bulk",
+  authenticate,
+  authorize("SELLER", "ADMIN"),
+  validate(bulkApplyDiscountSchema, "body"),
+  bulkApplyListingDiscount,
+);
+
+router.delete(
+  "/discounts/bulk",
+  authenticate,
+  authorize("SELLER", "ADMIN"),
+  validate(bulkRemoveDiscountSchema, "body"),
+  bulkRemoveListingDiscount,
 );
 
 router.get(
@@ -98,6 +119,13 @@ router.patch(
   applyListingDiscount,
 );
 
+router.delete(
+  "/:id/discount",
+  authenticate,
+  authorize("SELLER", "ADMIN"),
+  validate(bookListingParamSchema, "params"),
+  removeListingDiscount,
+);
 
 router.patch(
   "/:id/status",
@@ -126,5 +154,6 @@ router.delete(
 );
 
 export default router;
+
 
 

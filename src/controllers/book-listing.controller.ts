@@ -13,6 +13,9 @@ import {
   updateListingStockService,
   toggleBookListingStatusService,
   applyListingDiscountService,
+  removeListingDiscountService,
+  bulkApplyListingDiscountService,
+  bulkRemoveListingDiscountService,
 } from "../services/book-listing.service.js";
 import type {
   BookListingQueryInput,
@@ -24,6 +27,8 @@ import type {
   UpdateStockInput,
   ToggleBookListingStatusInput,
   ApplyListingDiscountInput,
+  BulkApplyDiscountInput,
+  BulkRemoveDiscountInput,
 } from "../validation/book-listing.schema.js";
 
 export const getPopularNovels = asyncHandler(async (req, res) => {
@@ -186,10 +191,53 @@ export const applyListingDiscount = asyncHandler(async (req, res) => {
   apiResponse(
     res,
     HTTP_STATUS.OK,
-    "Listing discount applied and selling price updated successfully",
+    "Listing discount applied successfully",
     listing,
   );
 });
+
+export const removeListingDiscount = asyncHandler(async (req, res) => {
+  const listingId = req.params.id as string;
+  const userContext = req.user!;
+
+  const listing = await removeListingDiscountService(listingId, userContext);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Listing discount removed successfully",
+    listing,
+  );
+});
+
+export const bulkApplyListingDiscount = asyncHandler(async (req, res) => {
+  const userContext = req.user!;
+  const input = req.body as BulkApplyDiscountInput;
+
+  const result = await bulkApplyListingDiscountService(userContext, input);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    `Bulk discount applied successfully to ${result.modifiedCount} listings`,
+    result,
+  );
+});
+
+export const bulkRemoveListingDiscount = asyncHandler(async (req, res) => {
+  const userContext = req.user!;
+  const input = req.body as BulkRemoveDiscountInput;
+
+  const result = await bulkRemoveListingDiscountService(userContext, input);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    `Bulk discount removed successfully from ${result.modifiedCount} listings`,
+    result,
+  );
+});
+
 
 
 

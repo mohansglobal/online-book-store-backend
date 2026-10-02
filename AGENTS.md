@@ -1,6 +1,3 @@
-teDiscount(listing.sellingPriceInPaise * item.quantity);
-
-
 ## Purpose
 
 This file defines the coding rules for the Node.js backend.
@@ -1215,6 +1212,16 @@ review
 ```
 
 That is more important than saving lines.
+
+---
+
+# 33. Test Data Naming and Cleanup
+
+When creating data for tests or verification scripts:
+
+1. **Clear Test Names**: Any test data added (books, listings, users, orders, categories, etc.) must have names or identifiers prefixed with `test_` or `[TEST]` (e.g., `test_user_...`, `test_book_...`) so it is immediately obvious that the data is for testing.
+2. **Mandatory Cleanup**: After testing is completed (whether successful or failed), always delete all created test data from the database.
+3. **No Orphan Data**: Never leave leftover test records behind in the database after a test run. Use `try ... finally` blocks in test scripts to guarantee cleanup always executes.
 
 ---
 

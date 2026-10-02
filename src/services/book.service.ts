@@ -621,6 +621,7 @@ export const createBookService = async (
   return newBook;
 };
 
+
 export const updateBookService = async (
   id: string,
   userContext: { id: string; role: string },
@@ -681,19 +682,21 @@ export const updateBookService = async (
     book.country = resolvedCountryId as unknown as typeof book.country;
   }
 
-  const resolvedIsbn = input.isbn !== undefined ? (input.isbn ? input.isbn.trim() : undefined) : book.isbn;
-  if (resolvedIsbn) {
-    await validateIsbnStandards(resolvedIsbn, {
-      publisher: input.publisher || book.publisher,
-      format: input.format || book.format,
-      language: input.language || book.language,
-      edition: input.edition !== undefined ? input.edition : book.edition,
-      excludeBookId: book._id,
-    });
-  }
-
   if (input.isbn !== undefined) {
-    book.isbn = input.isbn ? input.isbn.trim() : undefined;
+    const nextIsbn = input.isbn ? input.isbn.trim() : "";
+    if (nextIsbn) {
+      await validateIsbnStandards(nextIsbn, {
+        publisher: input.publisher || book.publisher,
+        format: input.format || book.format,
+        language: input.language || book.language,
+        edition: input.edition !== undefined ? input.edition : book.edition,
+        excludeBookId: book._id,
+      });
+      book.isbn = nextIsbn;
+    } else {
+      book.isbn = "";
+      book.set("isbn", undefined);
+    }
   }
   //update book fields
   if (input.title !== undefined) book.title = input.title;

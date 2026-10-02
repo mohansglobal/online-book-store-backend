@@ -212,10 +212,15 @@ export const createBookSchema = z.object({
   sellingPriceInPaise: z.coerce.number().nonnegative("Selling price in paise cannot be negative").optional(),
   priceInPaise: z.coerce.number().nonnegative("Price in paise cannot be negative").optional(),
   isbn: z
-    .string()
-    .trim()
-    .min(5, "ISBN must be at least 5 characters")
-    .max(50, "ISBN cannot exceed 50 characters")
+    .union([
+      z
+        .string()
+        .trim()
+        .min(5, "ISBN must be at least 5 characters")
+        .max(50, "ISBN cannot exceed 50 characters"),
+      z.literal(""),
+      z.null(),
+    ])
     .optional(),
   description: z.string().trim().min(1, "Description is required"),
   authors: z

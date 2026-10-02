@@ -399,6 +399,35 @@ export type CreateBookListingOutput = z.output<typeof createBookListingSchema>;
 
 export const updateBookListingSchema = z
   .object({
+    isbn: z
+      .union([
+        z
+          .string()
+          .trim()
+          .min(5, "ISBN must be at least 5 characters")
+          .max(50, "ISBN cannot exceed 50 characters"),
+        z.literal(""),
+        z.null(),
+      ])
+      .optional(),
+    title: z.string().trim().max(250).optional(),
+    titleBn: z.string().trim().max(250).optional(),
+    description: z.string().trim().optional(),
+    author: objectIdOrArray.optional(),
+    authors: objectIdOrArray.optional(),
+    publisher: z.string().trim().regex(objectIdRegex, "Invalid publisher ID format").optional(),
+    category: objectIdOrArray.optional(),
+    categories: objectIdOrArray.optional(),
+    country: z.string().trim().optional(),
+    language: z.string().trim().optional(),
+    searchTag: z.union([z.string(), z.array(z.string())]).optional(),
+    searchTags: z.union([z.string(), z.array(z.string())]).optional(),
+    format: z.string().trim().optional(),
+    edition: z.string().trim().optional(),
+    pages: z.coerce.number().int().positive().optional(),
+    noOfPage: z.coerce.number().int().positive().optional(),
+    coverImage: z.string().trim().optional(),
+    images: z.array(z.string().trim()).optional(),
     price: z.coerce.number().nonnegative().optional(),
     priceIn: z.coerce.number().nonnegative().optional(),
     priceMrp: z.coerce.number().nonnegative().optional(),
@@ -426,9 +455,27 @@ export const updateBookListingSchema = z
       .nonnegative("Stock cannot be negative")
       .optional(),
     sku: z.string().trim().optional(),
-    images: z.array(z.string().trim()).optional(),
     listingImages: z.array(z.string().trim()).optional(),
     isActive: z.boolean().optional(),
+    clearDiscount: z.boolean().optional(),
+    discountAction: z
+      .enum(["KEEP", "REMOVE", "UPDATE", "keep", "remove", "update"])
+      .transform((val) => val.toUpperCase() as "KEEP" | "REMOVE" | "UPDATE")
+      .optional(),
+    discountSchedule: z
+      .object({
+        discountType: z
+          .enum(["PERCENTAGE", "FLAT", "percentage", "flat"])
+          .transform((val) => val.toUpperCase() as "PERCENTAGE" | "FLAT"),
+        discountValue: z.coerce
+          .number()
+          .min(0, "Discount value cannot be negative"),
+        startDate: z.coerce.date().nullable().optional(),
+        endDate: z.coerce.date().nullable().optional(),
+        campaignName: z.string().trim().max(100).optional(),
+      })
+      .nullable()
+      .optional(),
   })
   .transform((data) => {
     let mrpInPaise = data.mrpInPaise;
@@ -454,13 +501,59 @@ export const updateBookListingSchema = z
           ? data.images
           : undefined;
 
+    const rawAuthors = [
+      ...(data.authors ? (Array.isArray(data.authors) ? data.authors : [data.authors]) : []),
+      ...(data.author ? (Array.isArray(data.author) ? data.author : [data.author]) : []),
+    ];
+    const authors = Array.from(new Set(rawAuthors));
+
+    const rawCategories = [
+      ...(data.categories ? (Array.isArray(data.categories) ? data.categories : [data.categories]) : []),
+      ...(data.category ? (Array.isArray(data.category) ? data.category : [data.category]) : []),
+    ];
+    const categories = Array.from(new Set(rawCategories));
+
+    const rawTags = [
+      ...(data.searchTags
+        ? Array.isArray(data.searchTags)
+          ? data.searchTags
+          : data.searchTags.split(",")
+        : []),
+      ...(data.searchTag
+        ? Array.isArray(data.searchTag)
+          ? data.searchTag
+          : data.searchTag.split(",")
+        : []),
+    ]
+      .map((t) => t.trim())
+      .filter((t) => t.length > 0);
+    const searchTags = Array.from(new Set(rawTags));
+
     return {
+      isbn: data.isbn !== undefined ? (data.isbn ? data.isbn.trim() : "") : undefined,
+      title: data.title,
+      titleBn: data.titleBn,
+      description: data.description,
+      authors: authors.length > 0 ? authors : undefined,
+      publisher: data.publisher,
+      categories: categories.length > 0 ? categories : undefined,
+      country: data.country,
+      language: data.language,
+      searchTags: searchTags.length > 0 ? searchTags : undefined,
+      format: data.format,
+      edition: data.edition,
+      pages: data.pages ?? data.noOfPage,
+      coverImage: data.coverImage,
+      images: data.images,
       mrpInPaise,
       sellingPriceInPaise,
       stock: data.stock,
       sku: data.sku,
       listingImages: resolvedListingImages,
       isActive: data.isActive,
+      clearDiscount: data.clearDiscount,
+      discountAction: data.discountAction,
+      discountSchedule: data.discountSchedule,
     };
   })
   .refine(
@@ -632,6 +725,9 @@ export const applyListingDiscountSchema = z
       .int("MRP in paise must be an integer")
       .positive("MRP in paise must be positive")
       .optional(),
+    startDate: z.coerce.date().nullable().optional(),
+    endDate: z.coerce.date().nullable().optional(),
+    campaignName: z.string().trim().max(100).optional(),
   })
   .refine(
     (data) => {
@@ -644,9 +740,99 @@ export const applyListingDiscountSchema = z
       message: "Percentage discount cannot exceed 100%",
       path: ["discountValue"],
     },
+  )
+  .refine(
+    (data) => {
+      if (data.startDate && data.endDate && data.endDate < data.startDate) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: "End date must be greater than or equal to start date",
+      path: ["endDate"],
+    },
   );
 
 export type ApplyListingDiscountInput = z.infer<typeof applyListingDiscountSchema>;
+
+export const bulkApplyDiscountSchema = z
+  .object({
+    targetType: z.enum(["ALL", "SPECIFIC", "all", "specific"]).transform((val) => val.toUpperCase() as "ALL" | "SPECIFIC"),
+    listingIds: z
+      .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid listing ObjectId"))
+      .optional(),
+    discountType: z
+      .enum(["PERCENTAGE", "FLAT", "percentage", "flat"])
+      .transform((val) => val.toUpperCase() as "PERCENTAGE" | "FLAT"),
+    discountValue: z.coerce
+      .number()
+      .min(0, "Discount value cannot be negative"),
+    startDate: z.coerce.date().nullable().optional(),
+    endDate: z.coerce.date().nullable().optional(),
+    campaignName: z.string().trim().max(100).optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.targetType === "SPECIFIC") {
+        return Array.isArray(data.listingIds) && data.listingIds.length > 0;
+      }
+      return true;
+    },
+    {
+      message: "listingIds is required and must not be empty when targetType is 'SPECIFIC'",
+      path: ["listingIds"],
+    },
+  )
+  .refine(
+    (data) => {
+      if (data.discountType === "PERCENTAGE" && data.discountValue > 100) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: "Percentage discount cannot exceed 100%",
+      path: ["discountValue"],
+    },
+  )
+  .refine(
+    (data) => {
+      if (data.startDate && data.endDate && data.endDate < data.startDate) {
+        return false;
+      }
+      return true;
+    },
+    {
+      message: "End date must be greater than or equal to start date",
+      path: ["endDate"],
+    },
+  );
+
+export type BulkApplyDiscountInput = z.infer<typeof bulkApplyDiscountSchema>;
+
+export const bulkRemoveDiscountSchema = z
+  .object({
+    targetType: z.enum(["ALL", "SPECIFIC", "all", "specific"]).transform((val) => val.toUpperCase() as "ALL" | "SPECIFIC"),
+    listingIds: z
+      .array(z.string().regex(/^[0-9a-fA-F]{24}$/, "Invalid listing ObjectId"))
+      .optional(),
+  })
+  .refine(
+    (data) => {
+      if (data.targetType === "SPECIFIC") {
+        return Array.isArray(data.listingIds) && data.listingIds.length > 0;
+      }
+      return true;
+    },
+    {
+      message: "listingIds is required and must not be empty when targetType is 'SPECIFIC'",
+      path: ["listingIds"],
+    },
+  );
+
+export type BulkRemoveDiscountInput = z.infer<typeof bulkRemoveDiscountSchema>;
+
 
 
 

@@ -75,7 +75,7 @@ export const getSellerRecentOrdersDashboardService = async (
 
   // 1. Resolve target month boundary
   const monthRange = calculateMonthDateRange(query.month, query.year);
-
+  
   // 2. Build MongoDB query filter
   const filter: Record<string, unknown> = {
     "items.seller": sellerId,
@@ -344,12 +344,17 @@ export const getSellerRevenueAnalyticsService = async (
 
   if (timeframe === "weekly") {
     currentEndDate = new Date(now);
-    currentStartDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    currentEndDate.setUTCHours(23, 59, 59, 999);
 
-    previousEndDate = new Date(currentStartDate);
-    previousStartDate = new Date(
-      currentStartDate.getTime() - 7 * 24 * 60 * 60 * 1000,
-    );
+    currentStartDate = new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+    currentStartDate.setUTCHours(0, 0, 0, 0);
+
+    previousEndDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    previousEndDate.setUTCHours(23, 59, 59, 999);
+
+    previousStartDate = new Date(now.getTime() - 13 * 24 * 60 * 60 * 1000);
+    previousStartDate.setUTCHours(0, 0, 0, 0);
+
     comparisonPeriodName = "last week";
   } else if (timeframe === "yearly") {
     currentStartDate = new Date(Date.UTC(targetYear, 0, 1, 0, 0, 0, 0));
@@ -450,6 +455,21 @@ export const getSellerRevenueAnalyticsService = async (
 
   let trendTotalInPaise = 0;
 
+  const fullMonthNames = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+  ];
+
   if (timeframe === "yearly") {
     const monthNames = [
       "Jan",
@@ -487,8 +507,56 @@ export const getSellerRevenueAnalyticsService = async (
         orders: mStats.totalOrders,
       });
     }
+  } else if (timeframe === "monthly") {
+    const daysInMonth = new Date(
+      Date.UTC(targetYear, targetMonth + 1, 0),
+    ).getUTCDate();
+
+    const dayPromises: Promise<{
+      revenueInPaise: number;
+      totalOrders: number;
+      totalItemsSold: number;
+    }>[] = [];
+    const dayMeta: Array<{ day: number; label: string; date: string }> = [];
+
+    for (let day = 1; day <= daysInMonth; day++) {
+      const dStart = new Date(
+        Date.UTC(targetYear, targetMonth, day, 0, 0, 0, 0),
+      );
+      const dEnd = new Date(
+        Date.UTC(targetYear, targetMonth, day, 23, 59, 59, 999),
+      );
+      const formattedDay = String(day).padStart(2, "0");
+      const formattedDate = `${targetYear}-${String(targetMonth + 1).padStart(2, "0")}-${formattedDay}`;
+
+      dayMeta.push({
+        day,
+        label: String(day),
+        date: formattedDate,
+      });
+
+      dayPromises.push(aggregateSellerStats(sellerObjectId, dStart, dEnd));
+    }
+
+    const dayResults = await Promise.all(dayPromises);
+
+    for (let i = 0; i < dayResults.length; i++) {
+      const dStats = dayResults[i];
+      const meta = dayMeta[i];
+      const dRevRupees = Math.round(dStats.revenueInPaise / 100);
+
+      trendTotalInPaise += dStats.revenueInPaise;
+
+      trendPoints.push({
+        label: meta.label,
+        date: meta.date,
+        revenueInRupees: dRevRupees,
+        revenueInPaise: dStats.revenueInPaise,
+        orders: dStats.totalOrders,
+      });
+    }
   } else {
-    // 7 days breakdown for Weekly / Monthly (matching "Revenue trend Last 7 days" card in UI)
+    // 7 days breakdown for Weekly (matching "Revenue trend Last 7 days" card in UI)
     const dayNames = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
     for (let d = 6; d >= 0; d--) {
@@ -518,6 +586,13 @@ export const getSellerRevenueAnalyticsService = async (
         orders: dStats.totalOrders,
       });
     }
+  }
+
+  let trendSubtitle = "Last 7 days";
+  if (timeframe === "yearly") {
+    trendSubtitle = `${targetYear}`;
+  } else if (timeframe === "monthly") {
+    trendSubtitle = `${fullMonthNames[targetMonth]} ${targetYear}`;
   }
 
   const trendTotalInRupees = Math.round(trendTotalInPaise / 100);
@@ -564,7 +639,7 @@ export const getSellerRevenueAnalyticsService = async (
     },
     trend: {
       title: "Revenue trend",
-      subtitle: timeframe === "yearly" ? `${targetYear}` : "Last 7 days",
+      subtitle: trendSubtitle,
       trendTotalInRupees,
       trendTotalInPaise,
       trendGrowthPercentage,
