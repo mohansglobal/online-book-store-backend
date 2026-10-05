@@ -4,7 +4,22 @@ import { BookModel } from "../models/book.model.js";
 import { BookListingModel } from "../models/book-listing.model.js";
 import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
-import type { CategoryQueryInput } from "../validation/category.schema.js";
+import { logger } from "../utils/logger.js";
+import { uploadImageBuffer } from "./cloudinary.service.js";
+import type {
+  CategoryQueryInput,
+  CreateCategoryInput,
+  UpdateCategoryInput,
+} from "../validation/category.schema.js";
+
+const slugify = (text: string): string => {
+  return text
+    .toLowerCase()
+    .trim()
+    .replace(/[^\w\s-]/g, "")
+    .replace(/[\s_-]+/g, "-")
+    .replace(/^-+|-+$/g, "");
+};
 
 export const getCategoriesService = async (query: CategoryQueryInput) => {
   const filter: Record<string, unknown> = {};
@@ -106,10 +121,16 @@ export const getCategoriesService = async (query: CategoryQueryInput) => {
   };
 };
 
-export const getCategoryBySlugService = async (slug: string) => {
-  const normalizedSlug = slug.toLowerCase().trim();
+export const getCategoryBySlugService = async (slugOrId: string) => {
+  const trimmed = slugOrId.trim();
+  const normalizedSlug = trimmed.toLowerCase();
+  const isObjectId = mongoose.Types.ObjectId.isValid(trimmed);
 
-  const category = await CategoryModel.findOne({ slug: normalizedSlug }).lean();
+  const filter = isObjectId
+    ? { $or: [{ _id: trimmed }, { slug: normalizedSlug }] }
+    : { slug: normalizedSlug };
+
+  const category = await CategoryModel.findOne(filter).lean();
 
   if (!category) {
     throw new AppError("Category not found", HTTP_STATUS.NOT_FOUND);
@@ -117,3 +138,161 @@ export const getCategoryBySlugService = async (slug: string) => {
 
   return category;
 };
+
+export const createCategoryService = async (
+  input: CreateCategoryInput,
+  file?: Express.Multer.File,
+) => {
+  let image = input.image ? input.image.trim() : undefined;
+
+  if (file) {
+    const uploadResult = await uploadImageBuffer(file.buffer, {
+      folder: "bookstore/categories",
+    });
+    image = uploadResult.secureUrl || uploadResult.url;
+  }
+
+  const name = input.name.trim();
+  const nameBn = input.nameBn ? input.nameBn.trim() : undefined;
+  const description = input.description ? input.description.trim() : undefined;
+  const isActive = input.isActive ?? true;
+
+  let baseSlug = input.slug?.toLowerCase().trim();
+  if (!baseSlug) {
+    baseSlug = slugify(name);
+    if (!baseSlug) {
+      baseSlug = "category";
+    }
+  }
+
+  let slug = baseSlug;
+  let counter = 1;
+  while (await CategoryModel.exists({ slug })) {
+    slug = `${baseSlug}-${counter}`;
+    counter += 1;
+  }
+
+  const category = await CategoryModel.create({
+    name,
+    nameBn,
+    slug,
+    description,
+    image,
+    isActive,
+  });
+
+  logger.info(
+    {
+      categoryId: category._id,
+      name: category.name,
+      slug: category.slug,
+    },
+    "Category created successfully by admin",
+  );
+
+  return category;
+};
+
+export const updateCategoryService = async (
+  id: string,
+  input: UpdateCategoryInput,
+  file?: Express.Multer.File,
+) => {
+  const isObjectId = mongoose.Types.ObjectId.isValid(id);
+
+  if (!isObjectId) {
+    throw new AppError("Invalid category ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const category = await CategoryModel.findById(id);
+
+  if (!category) {
+    throw new AppError("Category not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  if (file) {
+    const uploadResult = await uploadImageBuffer(file.buffer, {
+      folder: "bookstore/categories",
+    });
+    category.image = uploadResult.secureUrl || uploadResult.url;
+  } else if (input.image !== undefined) {
+    category.image = input.image ? input.image.trim() : undefined;
+  }
+
+  if (input.slug !== undefined) {
+    const normalizedSlug = input.slug.toLowerCase().trim();
+    const existing = await CategoryModel.findOne({
+      slug: normalizedSlug,
+      _id: { $ne: id },
+    }).lean();
+
+    if (existing) {
+      throw new AppError(
+        "A category with this slug already exists",
+        HTTP_STATUS.CONFLICT,
+      );
+    }
+
+    category.slug = normalizedSlug;
+  }
+
+  if (input.name !== undefined) {
+    category.name = input.name.trim();
+  }
+
+  if (input.nameBn !== undefined) {
+    category.nameBn = input.nameBn ? input.nameBn.trim() : undefined;
+  }
+
+  if (input.description !== undefined) {
+    category.description = input.description ? input.description.trim() : undefined;
+  }
+
+  if (input.isActive !== undefined) {
+    category.isActive = input.isActive;
+  }
+
+  await category.save();
+
+  logger.info(
+    {
+      categoryId: category._id,
+      name: category.name,
+      slug: category.slug,
+      isActive: category.isActive,
+    },
+    "Category updated successfully by admin",
+  );
+
+  return category;
+};
+
+export const deleteCategoryService = async (id: string) => {
+  const isObjectId = mongoose.Types.ObjectId.isValid(id);
+
+  if (!isObjectId) {
+    throw new AppError("Invalid category ID", HTTP_STATUS.BAD_REQUEST);
+  }
+
+  const category = await CategoryModel.findById(id);
+
+  if (!category) {
+    throw new AppError("Category not found", HTTP_STATUS.NOT_FOUND);
+  }
+
+  category.isActive = false;
+  await category.save();
+
+  logger.info(
+    {
+      categoryId: category._id,
+      name: category.name,
+      slug: category.slug,
+      isActive: category.isActive,
+    },
+    "Category deactivated (soft-deleted) successfully by admin",
+  );
+
+  return category;
+};
+

@@ -43,6 +43,7 @@ export interface OrderConfirmationEmailJobPayload {
     state?: string;
     postalCode: string;
     country: string;
+    mobileNumber?: string;
   };
 }
 

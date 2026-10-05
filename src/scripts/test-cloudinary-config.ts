@@ -4,7 +4,7 @@ import { extractPublicIdFromUrl } from "../services/cloudinary.service.js";
 async function runCloudinaryConfigTest() {
   console.log("=== Cloudinary Configuration Verification ===");
   console.log("Cloudinary configured:", isCloudinaryConfigured);
-
+  
   // Test URL extractor
   const sampleUrl =
     "https://res.cloudinary.com/demo/image/upload/v1612345678/online-book-store/sample-book-cover.png";

@@ -72,10 +72,16 @@ export const updateReviewSchema = z.object({
     .max(2000, "Review cannot exceed 2000 characters")
     .optional(),
   existingImages: z
-    .union([z.array(z.string().url("Invalid image URL")), z.string().url("Invalid image URL")])
+    .union([
+      z.array(z.string().url("Invalid image URL")),
+      z.string().url("Invalid image URL"),
+      z.literal("[]"),
+      z.literal(""),
+    ])
     .optional()
     .transform((val) => {
-      if (!val) return undefined;
+      if (val === undefined) return undefined;
+      if (!val || val === "[]" || val === "") return [];
       if (typeof val === "string") return [val];
       return val;
     }),

@@ -1225,6 +1225,27 @@ When creating data for tests or verification scripts:
 
 ---
 
+# Definition of Done
+
+A coding task is not complete until:
+
+1. The relevant existing implementation was inspected.
+2. Callers/callees affected by the change were considered.
+3. The smallest appropriate change was made.
+4. Existing behavior outside the requested scope was preserved.
+5. Relevant tests were added or updated when appropriate.
+6. TypeScript/typecheck passes.
+7. Lint passes.
+8. Relevant tests pass.
+9. The final git diff was reviewed.
+10. No unrelated files were changed.
+11. No test, validation, security check, or type safety was weakened to make the task pass.
+
+Never claim any verification succeeded unless it was actually executed.
+
+If something could not be verified, explicitly say:
+"Not verified: <reason>".
+
 # Final Rule
 
 Write code that looks boring.

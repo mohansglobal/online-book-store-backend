@@ -2,6 +2,8 @@ import nodemailer from "nodemailer";
 
 import { env } from "../config/env.js";
 import { logger } from "../utils/logger.js";
+import { generateOrderInvoicePdf } from "./pdf-invoice.service.js";
+
 
 import type {
   OrderConfirmationEmailJobPayload,
@@ -37,6 +39,11 @@ export interface SendMailOptions {
   subject: string;
   text: string;
   html?: string;
+  attachments?: Array<{
+    filename: string;
+    content: Buffer | string;
+    contentType?: string;
+  }>;
 }
 
 export const sendEmail = async ({
@@ -44,6 +51,7 @@ export const sendEmail = async ({
   subject,
   text,
   html,
+  attachments,
 }: SendMailOptions) => {
   const from = `Online BookStore <${smtpUser}>`;
 
@@ -53,7 +61,9 @@ export const sendEmail = async ({
     subject,
     text,
     html,
+    attachments,
   });
+
 
   logger.info(
     {
@@ -138,79 +148,37 @@ const generateBaseHtml = (content: string) => `
 export const sendOrderConfirmationEmail = async (
   data: OrderConfirmationEmailJobPayload,
 ) => {
-  const isCashOnDelivery = data.paymentMethod === "CASH_ON_DELIVERY";
-  const paymentStatus = isCashOnDelivery ? "Cash on Delivery" : "Paid Online";
+  const text = `Hello ${data.buyerName},
 
-  const deliveryCharge = data.deliveryChargeInPaise > 0 ? formatRupees(data.deliveryChargeInPaise) : "FREE";
-  const couponDiscount = data.couponDiscountInPaise > 0 ? formatRupees(data.couponDiscountInPaise) : "₹0.00";
-  const { shippingAddress } = data;
+Thank you for your order! Your order #${data.orderNumber} has been successfully confirmed.
 
-  const orderItemsText = data.items.map((item) => `${item.title}\nQuantity: ${item.quantity}\nPrice: ${formatRupees(item.priceInPaise)}\nSubtotal: ${formatRupees(item.subtotalInPaise)}`).join("\n\n");
-  const orderItemsHtml = data.items.map((item) => `
-    <tr>
-      <td>${item.title}</td>
-      <td>${item.quantity}</td>
-      <td>${formatRupees(item.priceInPaise)}</td>
-      <td>${formatRupees(item.subtotalInPaise)}</td>
-    </tr>
-  `).join("");
+Please find your official Tax Invoice PDF attached below for full order details.
 
-  const text = `Hello ${data.buyerName},\n\nThank you for your order.\n\nYour order has been successfully placed and confirmed.\n\nOrder Number: ${data.orderNumber}\nPayment Status: ${paymentStatus}\n\nDelivery Address:\n${shippingAddress.fullName}\n${shippingAddress.streetAddress || ""}\n${shippingAddress.city}, ${shippingAddress.state || ""}\n${shippingAddress.postalCode}\n${shippingAddress.country}\n\nOrder Items:\n\n${orderItemsText}\n\nItems Subtotal: ${formatRupees(data.subtotalInPaise)}\nDelivery Fee: ${deliveryCharge}\nCoupon Discount: ${couponDiscount}\nTotal Amount: ${formatRupees(data.totalAmountInPaise)}\n\nWe will notify you once your order has been dispatched.\n\nRegards,\nOnline BookStore`;
+Regards,
+Online BookStore Team`;
 
-  const html = generateBaseHtml(`
-    <h2>Order Confirmed!</h2>
-    <p>Hello <strong>${data.buyerName}</strong>,</p>
-    <p>Thank you for shopping with us. Your order has been successfully placed and confirmed. We are getting it ready for dispatch.</p>
-    
-    <div style="margin: 24px 0; padding: 16px; border: 1px solid #e2e8f0; border-radius: 6px;">
-      <p style="margin: 0 0 8px 0;"><strong>Order Number:</strong> ${data.orderNumber}</p>
-      <p style="margin: 0;"><strong>Payment Status:</strong> ${paymentStatus}</p>
-    </div>
-
-    <h3>Delivery Address</h3>
-    <p style="color: #64748b;">
-      ${shippingAddress.fullName}<br>
-      ${shippingAddress.streetAddress ? shippingAddress.streetAddress + '<br>' : ""}
-      ${shippingAddress.city}, ${shippingAddress.state || ""}<br>
-      ${shippingAddress.postalCode}<br>
-      ${shippingAddress.country}
-    </p>
-
-    <h3>Order Details</h3>
-    <div class="table-container">
-      <table>
-        <thead>
-          <tr>
-            <th>Item</th>
-            <th>Qty</th>
-            <th>Price</th>
-            <th>Subtotal</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${orderItemsHtml}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="summary-box">
-      <div class="summary-row"><span>Items Subtotal:</span> <span>${formatRupees(data.subtotalInPaise)}</span></div>
-      <div class="summary-row"><span>Delivery Fee:</span> <span>${deliveryCharge}</span></div>
-      <div class="summary-row"><span>Coupon Discount:</span> <span>${couponDiscount}</span></div>
-      <div class="summary-row total"><span>Total Amount:</span> <span>${formatRupees(data.totalAmountInPaise)}</span></div>
-    </div>
-
-    <p style="margin-top: 32px;">We will notify you via email once your order has been dispatched.</p>
-    <p>Regards,<br><strong>Online BookStore Team</strong></p>
-  `);
+  let attachments: Array<{ filename: string; content: Buffer; contentType: string }> | undefined;
+  try {
+    const pdfBuffer = await generateOrderInvoicePdf(data);
+    attachments = [
+      {
+        filename: `Tax_Invoice_${data.orderNumber}.pdf`,
+        content: pdfBuffer,
+        contentType: "application/pdf",
+      },
+    ];
+  } catch (pdfErr) {
+    logger.error({ err: pdfErr, orderNumber: data.orderNumber }, "Failed to generate PDF invoice attachment");
+  }
 
   return sendEmail({
     to: data.toEmail,
     subject: `Order Confirmed: #${data.orderNumber}`,
     text,
-    html,
+    attachments,
   });
 };
+
 
 export const sendSellerNewOrderAlertEmail = async (
   data: SellerNewOrderAlertJobPayload,
