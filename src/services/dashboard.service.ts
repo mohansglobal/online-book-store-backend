@@ -3,6 +3,7 @@ import mongoose from "mongoose";
 import { OrderModel } from "../models/order.model.js";
 import { BookListingModel } from "../models/book-listing.model.js";
 import { BookModel } from "../models/book.model.js";
+import { UserModel } from "../models/user.model.js";
 import { logger } from "../utils/logger.js";
 import { computeSellerOrderStatus } from "./order.service.js";
 import type {
@@ -11,6 +12,9 @@ import type {
   DailyOrdersAnalyticsQueryInput,
   CategoryBreakdownAnalyticsQueryInput,
   TopAuthorsAnalyticsQueryInput,
+  TopSellersAnalyticsQueryInput,
+  TopSellingBooksAnalyticsQueryInput,
+  OrderHealthAnalyticsQueryInput,
 } from "../validation/dashboard.schema.js";
 
 
@@ -66,9 +70,17 @@ const calculateMonthDateRange = (
 };
 
 export const getSellerRecentOrdersDashboardService = async (
-  sellerId: string,
+  userContext: { id: string; role: string },
   query: SellerDashboardRecentOrdersQueryInput,
 ) => {
+  let sellerObjectId: mongoose.Types.ObjectId | null = null;
+
+  if (userContext.role === "SELLER") {
+    sellerObjectId = new mongoose.Types.ObjectId(userContext.id);
+  } else if (query.sellerId && mongoose.Types.ObjectId.isValid(query.sellerId)) {
+    sellerObjectId = new mongoose.Types.ObjectId(query.sellerId);
+  }
+
   const page = query.page || 1;
   const limit = query.limit || 5;
   const skip = (page - 1) * limit;
@@ -77,9 +89,11 @@ export const getSellerRecentOrdersDashboardService = async (
   const monthRange = calculateMonthDateRange(query.month, query.year);
   
   // 2. Build MongoDB query filter
-  const filter: Record<string, unknown> = {
-    "items.seller": sellerId,
-  };
+  const filter: Record<string, unknown> = {};
+
+  if (sellerObjectId) {
+    filter["items.seller"] = sellerObjectId;
+  }
 
   if (query.status) {
     filter.orderStatus = query.status;
@@ -103,7 +117,7 @@ export const getSellerRecentOrdersDashboardService = async (
     OrderModel.countDocuments(filter),
   ]);
 
-  // 4. Extract seller-specific items and compute individual seller order total
+  // 4. Extract seller-specific items (or all items for admin platform-wide) and compute order total
   const recentOrders = orders.map((order) => {
     const buyer = (order.buyer || {}) as {
       _id?: unknown;
@@ -117,16 +131,19 @@ export const getSellerRecentOrdersDashboardService = async (
     const customerEmail = buyer.email || order.shippingAddress?.email || "-";
     const customerProfilePicture = buyer.profilePicture || "";
 
-    // Keep only items that belong to the current seller
-    const sellerItems = (order.items || []).filter((item) => {
+    // Keep items belonging to the seller, or all items for platform-wide admin view
+    const relevantItems = (order.items || []).filter((item) => {
+      if (!sellerObjectId) {
+        return true;
+      }
       const itemSellerId = item.seller ? item.seller.toString() : "";
-      return itemSellerId === sellerId;
+      return itemSellerId === sellerObjectId.toString();
     });
 
     let sellerOrderTotalInPaise = 0;
     let sellerItemCount = 0;
 
-    const formattedItems = sellerItems.map((item) => {
+    const formattedItems = relevantItems.map((item) => {
       const priceInPaise = item.priceInPaise;
       const quantity = item.quantity;
       const subtotalInPaise = item.subtotalInPaise || priceInPaise * quantity;
@@ -151,7 +168,7 @@ export const getSellerRecentOrdersDashboardService = async (
     });
 
     const sellerTotalInRupees = Math.round(sellerOrderTotalInPaise / 100);
-    const sellerStatus = computeSellerOrderStatus(sellerItems, order.orderStatus);
+    const sellerStatus = computeSellerOrderStatus(relevantItems, order.orderStatus);
 
     return {
       orderId: order._id.toString(),
@@ -174,68 +191,79 @@ export const getSellerRecentOrdersDashboardService = async (
     };
   });
 
-  // 5. Aggregate overall monthly earnings for the seller
-  let totalSellerEarningsInPaise = 0;
+  // 5. Aggregate overall monthly earnings
+  let totalEarningsInPaise = 0;
 
   if (monthRange) {
-    const sellerObjectId = new mongoose.Types.ObjectId(sellerId);
-    const monthlyAggregation = await OrderModel.aggregate([
-      {
-        $match: {
-          "items.seller": sellerObjectId,
-          createdAt: {
-            $gte: monthRange.startOfMonth,
-            $lte: monthRange.endOfMonth,
-          },
-          ...(query.status ? { orderStatus: query.status } : {}),
-        },
+    const matchFilter: Record<string, unknown> = {
+      orderStatus: { $nin: ["CANCELLED"] },
+      paymentStatus: { $ne: "FAILED" },
+      createdAt: {
+        $gte: monthRange.startOfMonth,
+        $lte: monthRange.endOfMonth,
       },
+      ...(query.status ? { orderStatus: query.status } : {}),
+    };
+
+    if (sellerObjectId) {
+      matchFilter["items.seller"] = sellerObjectId;
+    }
+
+    const aggregationPipeline: any[] = [
+      { $match: matchFilter },
       { $unwind: "$items" },
-      {
+    ];
+
+    if (sellerObjectId) {
+      aggregationPipeline.push({
         $match: {
           "items.seller": sellerObjectId,
         },
+      });
+    }
+
+    aggregationPipeline.push({
+      $group: {
+        _id: null,
+        totalEarningsInPaise: { $sum: "$items.subtotalInPaise" },
       },
-      {
-        $group: {
-          _id: null,
-          totalEarningsInPaise: { $sum: "$items.subtotalInPaise" },
-        },
-      },
-    ]);
+    });
+
+    const monthlyAggregation = await OrderModel.aggregate(aggregationPipeline);
 
     if (monthlyAggregation.length > 0) {
-      totalSellerEarningsInPaise =
+      totalEarningsInPaise =
         monthlyAggregation[0].totalEarningsInPaise || 0;
     }
   } else {
     // If no month filter, calculate sum across current page's orders
     for (const order of recentOrders) {
-      totalSellerEarningsInPaise += order.sellerTotalInPaise;
+      totalEarningsInPaise += order.sellerTotalInPaise;
     }
   }
 
-  const totalSellerEarningsInRupees = Math.round(
-    totalSellerEarningsInPaise / 100,
+  const totalEarningsInRupees = Math.round(
+    totalEarningsInPaise / 100,
   );
 
   logger.info(
     {
-      sellerId,
+      role: userContext.role,
+      sellerId: sellerObjectId ? sellerObjectId.toString() : "all",
       month: monthRange ? monthRange.monthLabel : "all",
       ordersReturned: recentOrders.length,
       totalOrdersCount,
-      totalSellerEarningsInRupees,
+      totalEarningsInRupees,
     },
-    "Seller dashboard recent orders retrieved successfully",
+    "Dashboard recent orders retrieved successfully",
   );
 
   return {
     summary: {
       month: monthRange ? monthRange.monthLabel : "all",
       totalOrdersInMonth: totalOrdersCount,
-      totalSellerEarningsInRupees,
-      totalSellerEarningsInPaise,
+      totalSellerEarningsInRupees: totalEarningsInRupees,
+      totalSellerEarningsInPaise: totalEarningsInPaise,
     },
     recentOrders,
     meta: {
@@ -287,7 +315,7 @@ const aggregateSellerStats = async (
       },
     });
   }
-
+                
   pipeline.push(
     {
       $group: {
@@ -325,10 +353,16 @@ const aggregateSellerStats = async (
 
 
 export const getSellerRevenueAnalyticsService = async (
-  sellerId: string,
+  userContext: { id: string; role: string },
   query: SellerRevenueAnalyticsQueryInput,
 ) => {
-  const sellerObjectId = new mongoose.Types.ObjectId(sellerId);
+  let sellerObjectId: mongoose.Types.ObjectId | null = null;
+
+  if (userContext.role === "SELLER") {
+    sellerObjectId = new mongoose.Types.ObjectId(userContext.id);
+  } else if (query.sellerId && mongoose.Types.ObjectId.isValid(query.sellerId)) {
+    sellerObjectId = new mongoose.Types.ObjectId(query.sellerId);
+  }
   const timeframe = query.timeframe || "monthly";
   const now = new Date();
 
@@ -386,6 +420,8 @@ export const getSellerRevenueAnalyticsService = async (
     );
     comparisonPeriodName = "last month";
   }
+
+ 
 
   // Today's Window
   const startOfToday = new Date(now);
@@ -600,13 +636,14 @@ export const getSellerRevenueAnalyticsService = async (
 
   logger.info(
     {
-      sellerId,
+      role: userContext.role,
+      sellerId: sellerObjectId ? sellerObjectId.toString() : "all",
       timeframe,
       totalRevenueInRupees,
       todayRevenueInRupees,
       totalOrders,
     },
-    "Seller revenue analytics computed successfully",
+    "Revenue analytics computed successfully",
   );
 
   return {
@@ -1311,6 +1348,867 @@ export const getTopAuthorsAnalyticsDashboardService = async (
     items,
   };
 };
+
+export const getTopSellersAnalyticsDashboardService = async (
+  query: TopSellersAnalyticsQueryInput,
+) => {
+  const timeframe = query.timeframe ?? "all";
+  const limit = query.limit ?? 5;
+  const now = new Date();
+  let startDate: Date | null = null;
+  let endDate: Date | null = null;
+
+  if (timeframe === "weekly") {
+    endDate = new Date(now);
+    startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  } else if (timeframe === "yearly") {
+    const targetYear = query.year ?? now.getUTCFullYear();
+    startDate = new Date(Date.UTC(targetYear, 0, 1, 0, 0, 0, 0));
+    endDate = new Date(Date.UTC(targetYear, 11, 31, 23, 59, 59, 999));
+  } else if (timeframe === "monthly") {
+    const targetYear = query.year ?? now.getUTCFullYear();
+    const targetMonth =
+      query.month !== undefined ? query.month - 1 : now.getUTCMonth();
+    startDate = new Date(Date.UTC(targetYear, targetMonth, 1, 0, 0, 0, 0));
+    endDate = new Date(
+      Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999),
+    );
+  }
+
+  const matchFilter: Record<string, unknown> = {
+    orderStatus: { $nin: ["CANCELLED"] },
+    paymentStatus: { $ne: "FAILED" },
+  };
+
+  if (startDate && endDate) {
+    matchFilter.createdAt = {
+      $gte: startDate,
+      $lte: endDate,
+    };
+  }
+
+  const pipeline: any[] = [
+    { $match: matchFilter },
+    { $unwind: "$items" },
+    {
+      $match: {
+        "items.seller": { $exists: true, $ne: null },
+        "items.status": { $ne: "CANCELLED" },
+      },
+    },
+    {
+      $group: {
+        _id: "$items.seller",
+        itemsSold: { $sum: "$items.quantity" },
+        revenueInPaise: { $sum: "$items.subtotalInPaise" },
+        uniqueOrders: { $addToSet: "$_id" },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        itemsSold: 1,
+        revenueInPaise: 1,
+        orderCount: { $size: "$uniqueOrders" },
+      },
+    },
+    {
+      $sort: {
+        itemsSold: -1,
+        revenueInPaise: -1,
+      },
+    },
+  ];
+
+  const rawSellers = await OrderModel.aggregate(pipeline);
+
+  let totalItemsSoldAcrossAllSellers = 0;
+  let totalRevenueInPaiseAcrossAllSellers = 0;
+
+  for (const sellerItem of rawSellers) {
+    totalItemsSoldAcrossAllSellers += sellerItem.itemsSold;
+    totalRevenueInPaiseAcrossAllSellers += sellerItem.revenueInPaise;
+  }
+
+  const topRawSellers = rawSellers.slice(0, limit);
+  const sellerIds = topRawSellers.map((item) => item._id);
+
+  const [sellerUsers, sellerListingsCounts, totalRegisteredSellers] =
+    await Promise.all([
+      UserModel.find({ _id: { $in: sellerIds } })
+        .select("name email mobileNumber profilePicture role isActive createdAt")
+        .lean(),
+      BookListingModel.aggregate([
+        {
+          $match: {
+            seller: { $in: sellerIds },
+            isActive: true,
+          },
+        },
+        {
+          $group: {
+            _id: "$seller",
+            activeListingsCount: { $sum: 1 },
+          },
+        },
+      ]),
+      UserModel.countDocuments({ role: "SELLER" }),
+    ]);
+
+  const userMap = new Map<string, (typeof sellerUsers)[number]>();
+  for (const user of sellerUsers) {
+    userMap.set(user._id.toString(), user);
+  }
+
+  const listingCountMap = new Map<string, number>();
+  for (const item of sellerListingsCounts) {
+    listingCountMap.set(item._id.toString(), item.activeListingsCount);
+  }
+
+  const items = topRawSellers.map((item, index) => {
+    const rank = index + 1;
+    const sellerId = item._id.toString();
+    const userDoc = userMap.get(sellerId);
+
+    const name = userDoc?.name || "Unknown Seller";
+    const email = userDoc?.email || "-";
+    const mobileNumber = userDoc?.mobileNumber || "-";
+    const profilePicture = userDoc?.profilePicture || "";
+    const isActive = userDoc?.isActive ?? true;
+
+    const itemsSold = item.itemsSold;
+    const revenueInPaise = item.revenueInPaise;
+    const revenueInRupees = Math.round(revenueInPaise / 100);
+    const orderCount = item.orderCount;
+    const activeListingsCount = listingCountMap.get(sellerId) || 0;
+
+    const percentage =
+      totalItemsSoldAcrossAllSellers > 0
+        ? Number(
+            ((itemsSold / totalItemsSoldAcrossAllSellers) * 100).toFixed(1),
+          )
+        : 0;
+
+    return {
+      rank,
+      sellerId,
+      seller: {
+        id: sellerId,
+        name,
+        email,
+        mobileNumber,
+        profilePicture,
+        isActive,
+      },
+      itemsSold,
+      formattedItemsSold: `${itemsSold.toLocaleString("en-IN")} items sold`,
+      percentage,
+      formattedPercentage: `${percentage}%`,
+      revenueInRupees,
+      revenueInPaise,
+      formattedRevenue: `₹${revenueInRupees.toLocaleString("en-IN")}`,
+      orderCount,
+      activeListingsCount,
+    };
+  });
+
+  const totalRevenueInPaise = totalRevenueInPaiseAcrossAllSellers;
+  const totalRevenueInRupees = Math.round(totalRevenueInPaise / 100);
+
+  logger.info(
+    {
+      timeframe,
+      limit,
+      totalSellersWithSales: rawSellers.length,
+      totalItemsSold: totalItemsSoldAcrossAllSellers,
+      topSellersReturned: items.length,
+    },
+    "Admin top sellers analytics retrieved successfully",
+  );
+
+  return {
+    title: `Top ${limit} Sellers by Sold Items`,
+    subtitle: "TOP SELLERS PERFORMANCE",
+    timeframe,
+    limit,
+    totalRegisteredSellers,
+    totalSellersWithSales: rawSellers.length,
+    totalItemsSold: totalItemsSoldAcrossAllSellers,
+    formattedTotalItemsSold: `${totalItemsSoldAcrossAllSellers.toLocaleString("en-IN")} Total Items Sold`,
+    totalRevenueInRupees,
+    totalRevenueInPaise,
+    items,
+  };
+};
+
+export const getTopSellingBooksAnalyticsDashboardService = async (
+  query: TopSellingBooksAnalyticsQueryInput,
+) => {
+  const timeframe = query.timeframe ?? "all";
+  const limit = query.limit ?? 5;
+  const now = new Date();
+  let startDate: Date | null = null;
+  let endDate: Date | null = null;
+  let timeframeLabel = "All Time";
+
+  if (timeframe === "1w") {
+    endDate = new Date(now);
+    startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    timeframeLabel = "Last 1 Week";
+  } else if (timeframe === "1m") {
+    const targetYear = query.year;
+    const targetMonth = query.month !== undefined ? query.month - 1 : undefined;
+    
+    if (targetYear !== undefined && targetMonth !== undefined) {
+      startDate = new Date(Date.UTC(targetYear, targetMonth, 1, 0, 0, 0, 0));
+      endDate = new Date(Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999));
+      timeframeLabel = "Last 1 Month";
+    } else {
+      endDate = new Date(now);
+      startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+      timeframeLabel = "Last 1 Month";
+    }
+  } else if (timeframe === "1y") {
+    const targetYear = query.year;
+    if (targetYear !== undefined) {
+      startDate = new Date(Date.UTC(targetYear, 0, 1, 0, 0, 0, 0));
+      endDate = new Date(Date.UTC(targetYear, 11, 31, 23, 59, 59, 999));
+      timeframeLabel = "Last 1 Year";
+    } else {
+      endDate = new Date(now);
+      startDate = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+      timeframeLabel = "Last 1 Year";
+    }
+  } else if (timeframe === "5y") {
+    endDate = new Date(now);
+    startDate = new Date(now.getTime() - 5 * 365 * 24 * 60 * 60 * 1000);
+    timeframeLabel = "Last 5 Years";
+  }
+
+  const matchFilter: Record<string, unknown> = {
+    orderStatus: { $nin: ["CANCELLED"] },
+    paymentStatus: { $ne: "FAILED" },
+  };
+
+  if (startDate && endDate) {
+    matchFilter.createdAt = {
+      $gte: startDate,
+      $lte: endDate,
+    };
+  }
+
+  const pipeline: any[] = [
+    { $match: matchFilter },
+    { $unwind: "$items" },
+    {
+      $match: {
+        "items.book": { $exists: true, $ne: null },
+        "items.status": { $ne: "CANCELLED" },
+      },
+    },
+    {
+      $group: {
+        _id: "$items.book",
+        unitsSold: { $sum: "$items.quantity" },
+        revenueInPaise: { $sum: "$items.subtotalInPaise" },
+        uniqueOrders: { $addToSet: "$_id" },
+      },
+    },
+    {
+      $project: {
+        _id: 1,
+        unitsSold: 1,
+        revenueInPaise: 1,
+        orderCount: { $size: "$uniqueOrders" },
+      },
+    },
+    {
+      $sort: {
+        unitsSold: -1,
+        revenueInPaise: -1,
+      },
+    },
+  ];
+
+  const rawBooks = await OrderModel.aggregate(pipeline);
+
+  let totalUnitsSoldAcrossAllBooks = 0;
+  let totalRevenueInPaiseAcrossAllBooks = 0;
+
+  for (const item of rawBooks) {
+    totalUnitsSoldAcrossAllBooks += item.unitsSold;
+    totalRevenueInPaiseAcrossAllBooks += item.revenueInPaise;
+  }
+
+  const topRawBooks = rawBooks.slice(0, limit);
+  const bookIds = topRawBooks.map((item) => item._id);
+
+  const [books, sellerListings] = await Promise.all([
+    BookModel.find({ _id: { $in: bookIds } })
+      .populate("authors", "name nameBn slug photo")
+      .populate("categories", "name slug")
+      .populate("publisher", "name slug")
+      .lean(),
+    BookListingModel.aggregate([
+      {
+        $match: {
+          book: { $in: bookIds },
+          isActive: true,
+        },
+      },
+      {
+        $group: {
+          _id: "$book",
+          minPriceInPaise: { $min: "$sellingPriceInPaise" },
+          totalStock: { $sum: "$stock" },
+          activeListingsCount: { $sum: 1 },
+        },
+      },
+    ]),
+  ]);
+
+  const bookMap = new Map<string, (typeof books)[number]>();
+  for (const book of books) {
+    bookMap.set(book._id.toString(), book);
+  }
+
+  const listingMap = new Map<string, any>();
+  for (const listing of sellerListings) {
+    listingMap.set(listing._id.toString(), listing);
+  }
+
+  const items = topRawBooks.map((item, index) => {
+    const rank = index + 1;
+    const bookId = item._id.toString();
+    const bookDoc = bookMap.get(bookId);
+    const listingInfo = listingMap.get(bookId);
+
+    const title = bookDoc?.title || "Unknown Book";
+    const titleBn = bookDoc?.titleBn || "";
+    const slug = bookDoc?.slug || "";
+    const coverImage = bookDoc?.coverImage || "";
+    const format = bookDoc?.format || "PAPERBACK";
+
+    const authors = Array.isArray(bookDoc?.authors) ? bookDoc.authors : [];
+    const primaryAuthor = authors.length > 0 ? (authors[0] as any).name : "Unknown Author";
+
+    const categories = Array.isArray(bookDoc?.categories) ? bookDoc.categories : [];
+    const primaryCategory = categories.length > 0 ? (categories[0] as any).name : "General";
+
+    const unitsSold = item.unitsSold;
+    const revenueInPaise = item.revenueInPaise;
+    const revenueInRupees = Math.round(revenueInPaise / 100);
+    const orderCount = item.orderCount;
+
+    const percentage =
+      totalUnitsSoldAcrossAllBooks > 0
+        ? Number(((unitsSold / totalUnitsSoldAcrossAllBooks) * 100).toFixed(1))
+        : 0;
+
+    const currentPriceInPaise = listingInfo?.minPriceInPaise || bookDoc?.priceIn || 0;
+    const currentPriceInRupees = Math.round(currentPriceInPaise / 100);
+    const stock = listingInfo?.totalStock ?? 0;
+
+    return {
+      rank,
+      bookId,
+      title,
+      titleBn,
+      slug,
+      coverImage,
+      format,
+      authors,
+      primaryAuthor,
+      categories,
+      primaryCategory,
+      unitsSold,
+      formattedUnitsSold: `${unitsSold.toLocaleString("en-IN")} copies sold`,
+      percentage,
+      formattedPercentage: `${percentage}%`,
+      revenueInRupees,
+      revenueInPaise,
+      formattedRevenue: `₹${revenueInRupees.toLocaleString("en-IN")}`,
+      orderCount,
+      currentPriceInRupees,
+      stock,
+    };
+  });
+
+  const totalRevenueInRupees = Math.round(totalRevenueInPaiseAcrossAllBooks / 100);
+
+  logger.info(
+    {
+      timeframe,
+      limit,
+      totalBooksWithSales: rawBooks.length,
+      totalUnitsSold: totalUnitsSoldAcrossAllBooks,
+      topBooksReturned: items.length,
+    },
+    "Admin top selling books analytics retrieved successfully",
+  );
+
+  return {
+    title: `Top ${limit} Selling Books`,
+    subtitle: "TOP PERFORMING TITLES",
+    timeframe,
+    timeframeLabel,
+    limit,
+    startDate: startDate ? startDate.toISOString() : null,
+    endDate: endDate ? endDate.toISOString() : null,
+    totalBooksWithSales: rawBooks.length,
+    totalUnitsSold: totalUnitsSoldAcrossAllBooks,
+    formattedTotalUnitsSold: `${totalUnitsSoldAcrossAllBooks.toLocaleString("en-IN")} Total Copies Sold`,
+    totalRevenueInRupees,
+    totalRevenueInPaise: totalRevenueInPaiseAcrossAllBooks,
+    formattedTotalRevenue: `₹${totalRevenueInRupees.toLocaleString("en-IN")}`,
+    items,
+  };
+};
+
+const resolveHealthTimeframe = (
+  timeframe: "all" | "7d" | "30d" | "this_month" | "last_month" | "yearly",
+  yearInput?: number,
+  monthInput?: number,
+): { startDate: Date | null; endDate: Date | null; timeframeLabel: string } => {
+  const now = new Date();
+
+  if (timeframe === "7d") {
+    const startDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    const endDate = new Date(now);
+    return { startDate, endDate, timeframeLabel: "Last 7 Days" };
+  }
+
+  if (timeframe === "30d") {
+    const startDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    const endDate = new Date(now);
+    return { startDate, endDate, timeframeLabel: "Last 30 Days" };
+  }
+
+  if (timeframe === "this_month") {
+    const targetYear = yearInput ?? now.getUTCFullYear();
+    const targetMonth =
+      monthInput !== undefined ? monthInput - 1 : now.getUTCMonth();
+    const startDate = new Date(
+      Date.UTC(targetYear, targetMonth, 1, 0, 0, 0, 0),
+    );
+    const endDate = new Date(
+      Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999),
+    );
+    return { startDate, endDate, timeframeLabel: "This Month" };
+  }
+
+  if (timeframe === "last_month") {
+    const targetYear =
+      now.getUTCMonth() === 0
+        ? now.getUTCFullYear() - 1
+        : now.getUTCFullYear();
+    const targetMonth =
+      now.getUTCMonth() === 0 ? 11 : now.getUTCMonth() - 1;
+    const startDate = new Date(
+      Date.UTC(targetYear, targetMonth, 1, 0, 0, 0, 0),
+    );
+    const endDate = new Date(
+      Date.UTC(targetYear, targetMonth + 1, 0, 23, 59, 59, 999),
+    );
+    return { startDate, endDate, timeframeLabel: "Last Month" };
+  }
+
+  if (timeframe === "yearly") {
+    const targetYear = yearInput ?? now.getUTCFullYear();
+    const startDate = new Date(Date.UTC(targetYear, 0, 1, 0, 0, 0, 0));
+    const endDate = new Date(Date.UTC(targetYear, 11, 31, 23, 59, 59, 999));
+    return { startDate, endDate, timeframeLabel: `Year ${targetYear}` };
+  }
+
+  return { startDate: null, endDate: null, timeframeLabel: "All Time" };
+};
+
+export const getOrderHealthAnalyticsDashboardService = async (
+  query: OrderHealthAnalyticsQueryInput,
+) => {
+  const timeframe = query.timeframe ?? "all";
+  const { startDate, endDate, timeframeLabel } = resolveHealthTimeframe(
+    timeframe,
+    query.year,
+    query.month,
+  );
+
+  const now = new Date();
+  const currentWeekStart = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+  const currentWeekEnd = new Date(now);
+  const priorWeekStart = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+  const priorWeekEnd = currentWeekStart;
+
+  const timelineStartDate = startDate ?? new Date(now.getTime() - 6 * 24 * 60 * 60 * 1000);
+  const timelineEndDate = endDate ?? now;
+
+  const matchFilter: Record<string, unknown> = {};
+  if (startDate && endDate) {
+    matchFilter.createdAt = {
+      $gte: startDate,
+      $lte: endDate,
+    };
+  }
+
+  const facetPipeline = [
+    {
+      $facet: {
+        statusCounts: [
+          { $match: matchFilter },
+          {
+            $group: {
+              _id: null,
+              totalOrders: { $sum: 1 },
+              deliveredCount: {
+                $sum: {
+                  $cond: [{ $eq: ["$orderStatus", "DELIVERED"] }, 1, 0],
+                },
+              },
+              cancelledCount: {
+                $sum: {
+                  $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0],
+                },
+              },
+              failedCount: {
+                $sum: {
+                  $cond: [{ $eq: ["$paymentStatus", "FAILED"] }, 1, 0],
+                },
+              },
+            },
+          },
+        ],
+        dispatchedOrders: [
+          {
+            $match: {
+              ...matchFilter,
+              $or: [
+                { "items.tracking.shippedAt": { $exists: true, $ne: null } },
+                { orderStatus: { $in: ["SHIPPED", "DELIVERED"] } },
+              ],
+            },
+          },
+          {
+            $project: {
+              createdAt: 1,
+              updatedAt: 1,
+              itemsShippedAt: "$items.tracking.shippedAt",
+            },
+          },
+        ],
+        currentWeek: [
+          {
+            $match: {
+              createdAt: { $gte: currentWeekStart, $lte: currentWeekEnd },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              cancelled: {
+                $sum: {
+                  $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0],
+                },
+              },
+            },
+          },
+        ],
+        priorWeek: [
+          {
+            $match: {
+              createdAt: { $gte: priorWeekStart, $lt: currentWeekStart },
+            },
+          },
+          {
+            $group: {
+              _id: null,
+              total: { $sum: 1 },
+              cancelled: {
+                $sum: {
+                  $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0],
+                },
+              },
+            },
+          },
+        ],
+        dailyTimeline: [
+          {
+            $match: {
+              createdAt: { $gte: timelineStartDate, $lte: timelineEndDate },
+            },
+          },
+          {
+            $group: {
+              _id: {
+                $dateToString: { format: "%Y-%m-%d", date: "$createdAt" },
+              },
+              delivered: {
+                $sum: { $cond: [{ $eq: ["$orderStatus", "DELIVERED"] }, 1, 0] },
+              },
+              cancelled: {
+                $sum: { $cond: [{ $eq: ["$orderStatus", "CANCELLED"] }, 1, 0] },
+              },
+              processing: {
+                $sum: {
+                  $cond: [
+                    {
+                      $and: [
+                        { $ne: ["$orderStatus", "DELIVERED"] },
+                        { $ne: ["$orderStatus", "CANCELLED"] },
+                        { $ne: ["$paymentStatus", "FAILED"] },
+                      ],
+                    },
+                    1,
+                    0,
+                  ],
+                },
+              },
+            },
+          },
+          { $sort: { _id: 1 as const } },
+        ],
+      },
+    },
+  ];
+
+  const [aggregationResult] = await OrderModel.aggregate(facetPipeline);
+
+  // 1. Extract status counts
+  const statusCountsData = aggregationResult?.statusCounts?.[0];
+  const totalOrders = statusCountsData?.totalOrders ?? 0;
+  const deliveredCount = statusCountsData?.deliveredCount ?? 0;
+  const cancelledCount = statusCountsData?.cancelledCount ?? 0;
+  const failedCount = statusCountsData?.failedCount ?? 0;
+
+  // Calculate in-flight / processing orders
+  const terminalCount = deliveredCount + cancelledCount + failedCount;
+  const inFlightCount = Math.max(0, totalOrders - terminalCount);
+
+  // Calculate percentages (rounded to 1 decimal place)
+  const deliveredPercentage =
+    totalOrders > 0
+      ? Number(((deliveredCount / totalOrders) * 100).toFixed(1))
+      : 0;
+
+  const cancellationPercentage =
+    totalOrders > 0
+      ? Number(((cancelledCount / totalOrders) * 100).toFixed(1))
+      : 0;
+
+  const failedPercentage =
+    totalOrders > 0
+      ? Number(((failedCount / totalOrders) * 100).toFixed(1))
+      : 0;
+
+  const inFlightPercentage =
+    totalOrders > 0
+      ? Number(((inFlightCount / totalOrders) * 100).toFixed(1))
+      : 0;
+
+  // 2. Calculate average dispatch time
+  const dispatchedOrders = aggregationResult?.dispatchedOrders ?? [];
+  let totalDispatchMs = 0;
+  let validDispatchedCount = 0;
+
+  for (const order of dispatchedOrders) {
+    const createdAt = new Date(order.createdAt).getTime();
+    let earliestShippedAtMs: number | null = null;
+
+    if (Array.isArray(order.itemsShippedAt)) {
+      for (const shippedDate of order.itemsShippedAt) {
+        if (shippedDate) {
+          const time = new Date(shippedDate).getTime();
+          if (earliestShippedAtMs === null || time < earliestShippedAtMs) {
+            earliestShippedAtMs = time;
+          }
+        }
+      }
+    }
+
+    if (earliestShippedAtMs === null && order.updatedAt) {
+      earliestShippedAtMs = new Date(order.updatedAt).getTime();
+    }
+
+    if (earliestShippedAtMs !== null && earliestShippedAtMs >= createdAt) {
+      const durationMs = earliestShippedAtMs - createdAt;
+      totalDispatchMs += durationMs;
+      validDispatchedCount += 1;
+    }
+  }
+
+  let avgDispatchDays = 0;
+  let avgDispatchHours = 0;
+
+  if (validDispatchedCount > 0) {
+    const avgDispatchMs = totalDispatchMs / validDispatchedCount;
+    const msInDay = 1000 * 60 * 60 * 24;
+    const msInHour = 1000 * 60 * 60;
+    avgDispatchDays = Number((avgDispatchMs / msInDay).toFixed(1));
+    avgDispatchHours = Number((avgDispatchMs / msInHour).toFixed(1));
+  }
+
+  // 3. Calculate week-over-week cancellation trend
+  const currentWeekData = aggregationResult?.currentWeek?.[0];
+  const priorWeekData = aggregationResult?.priorWeek?.[0];
+
+  // 4. Generate multi-day timeline for 3-line chart
+  const rawTimeline = aggregationResult?.dailyTimeline ?? [];
+  const timelineMap = new Map<string, { delivered: number; processing: number; cancelled: number }>();
+
+  for (const item of rawTimeline) {
+    if (item._id) {
+      timelineMap.set(item._id, {
+        delivered: item.delivered ?? 0,
+        processing: item.processing ?? 0,
+        cancelled: item.cancelled ?? 0,
+      });
+    }
+  }
+
+  const dayNamesShort = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const timeline: Array<{
+    date: string;
+    label: string;
+    delivered: number;
+    processing: number;
+    cancelled: number;
+  }> = [];
+
+  const loopDate = new Date(timelineStartDate);
+  loopDate.setHours(0, 0, 0, 0);
+  const endLimit = new Date(timelineEndDate);
+  endLimit.setHours(23, 59, 59, 999);
+
+  while (loopDate <= endLimit) {
+    const year = loopDate.getFullYear();
+    const month = String(loopDate.getMonth() + 1).padStart(2, "0");
+    const day = String(loopDate.getDate()).padStart(2, "0");
+    const dateKey = `${year}-${month}-${day}`;
+    const dayName = dayNamesShort[loopDate.getDay()];
+
+    const stat = timelineMap.get(dateKey) ?? {
+      delivered: 0,
+      processing: 0,
+      cancelled: 0,
+    };
+
+    timeline.push({
+      date: dateKey,
+      label: dayName,
+      delivered: stat.delivered,
+      processing: stat.processing,
+      cancelled: stat.cancelled,
+    });
+
+    loopDate.setDate(loopDate.getDate() + 1);
+  }
+
+  const currentWeekTotal = currentWeekData?.total ?? 0;
+  const currentWeekCancelled = currentWeekData?.cancelled ?? 0;
+  const priorWeekTotal = priorWeekData?.total ?? 0;
+  const priorWeekCancelled = priorWeekData?.cancelled ?? 0;
+
+  const currentWeekRate =
+    currentWeekTotal > 0
+      ? Number(((currentWeekCancelled / currentWeekTotal) * 100).toFixed(1))
+      : 0;
+
+  const priorWeekRate =
+    priorWeekTotal > 0
+      ? Number(((priorWeekCancelled / priorWeekTotal) * 100).toFixed(1))
+      : 0;
+
+  const rateDifference = Number((currentWeekRate - priorWeekRate).toFixed(1));
+
+  let direction: "down" | "up" | "neutral" = "neutral";
+  let absDifference = 0;
+  let formattedTrendLabel = "0.0% change vs last week";
+
+  if (rateDifference < 0) {
+    direction = "down";
+    absDifference = Math.abs(rateDifference);
+    formattedTrendLabel = `↓ ${absDifference}% cancellations vs last week`;
+  } else if (rateDifference > 0) {
+    direction = "up";
+    absDifference = rateDifference;
+    formattedTrendLabel = `↑ ${absDifference}% cancellations vs last week`;
+  }
+
+  const volumePercentageChange =
+    priorWeekCancelled > 0
+      ? Number(
+          (
+            ((currentWeekCancelled - priorWeekCancelled) /
+              priorWeekCancelled) *
+            100
+          ).toFixed(1),
+        )
+      : 0;
+
+  logger.info(
+    {
+      timeframe,
+      totalOrders,
+      deliveredPercentage,
+      cancellationPercentage,
+      failedPercentage,
+      avgDispatchDays,
+      rateDifference,
+      direction,
+    },
+    "Admin order health analytics retrieved successfully",
+  );
+
+  return {
+    title: "Order Health",
+    timeframe,
+    timeframeLabel,
+    startDate: startDate ? startDate.toISOString() : null,
+    endDate: endDate ? endDate.toISOString() : null,
+    totalOrders,
+    formattedTotalOrders: `${totalOrders.toLocaleString("en-IN")} total orders`,
+    delivered: {
+      count: deliveredCount,
+      percentage: deliveredPercentage,
+      formatted: `${deliveredPercentage}%`,
+    },
+    cancelled: {
+      count: cancelledCount,
+      percentage: cancellationPercentage,
+      formatted: `${cancellationPercentage}%`,
+    },
+    failed: {
+      count: failedCount,
+      percentage: failedPercentage,
+      formatted: `${failedPercentage}%`,
+    },
+    inFlight: {
+      count: inFlightCount,
+      percentage: inFlightPercentage,
+      formatted: `${inFlightPercentage}%`,
+    },
+    avgDispatchTime: {
+      days: avgDispatchDays,
+      hours: avgDispatchHours,
+      formatted: `${avgDispatchDays} days avg. dispatch time`,
+    },
+    cancellationTrend: {
+      direction,
+      percentage: absDifference,
+      rateDifference,
+      currentWeekRate,
+      previousWeekRate: priorWeekRate,
+      currentWeekCancelledCount: currentWeekCancelled,
+      previousWeekCancelledCount: priorWeekCancelled,
+      currentWeekTotalOrders: currentWeekTotal,
+      previousWeekTotalOrders: priorWeekTotal,
+      volumePercentageChange,
+      formatted: formattedTrendLabel,
+    },
+    timeline,
+  };
+};
+
 
 
 

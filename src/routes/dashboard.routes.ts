@@ -8,6 +8,9 @@ import {
   dailyOrdersAnalyticsQuerySchema,
   categoryBreakdownAnalyticsQuerySchema,
   topAuthorsAnalyticsQuerySchema,
+  topSellersAnalyticsQuerySchema,
+  topSellingBooksAnalyticsQuerySchema,
+  orderHealthAnalyticsQuerySchema,
 } from "../validation/dashboard.schema.js";
 import {
   getSellerRecentOrders,
@@ -15,6 +18,9 @@ import {
   getDailyOrdersAnalytics,
   getCategoryBreakdownAnalytics,
   getTopAuthorsAnalytics,
+  getTopSellersAnalytics,
+  getTopSellingBooksAnalytics,
+  getOrderHealthAnalytics,
 } from "../controllers/dashboard.controller.js";
 
 const router = Router();
@@ -118,7 +124,47 @@ router.get(
   getTopAuthorsAnalytics,
 );
 
+router.get(
+  "/top-sellers",
+  authorize("ADMIN"),
+  validate(topSellersAnalyticsQuerySchema, "query"),
+  getTopSellersAnalytics,
+);
 
+router.get(
+  "/admin/top-sellers",
+  authorize("ADMIN"),
+  validate(topSellersAnalyticsQuerySchema, "query"),
+  getTopSellersAnalytics,
+);
+
+router.get(
+  "/top-books",
+  authorize("ADMIN"),
+  validate(topSellingBooksAnalyticsQuerySchema, "query"),
+  getTopSellingBooksAnalytics,
+);
+
+router.get(
+  "/admin/top-books",
+  authorize("ADMIN"),
+  validate(topSellingBooksAnalyticsQuerySchema, "query"),
+  getTopSellingBooksAnalytics,
+);
+
+router.get(
+  "/order-health",
+  authorize("ADMIN"),
+  validate(orderHealthAnalyticsQuerySchema, "query"),
+  getOrderHealthAnalytics,
+);
+
+router.get(
+  "/admin/order-health",
+  authorize("ADMIN"),
+  validate(orderHealthAnalyticsQuerySchema, "query"),
+  getOrderHealthAnalytics,
+);
 
 export default router;
 

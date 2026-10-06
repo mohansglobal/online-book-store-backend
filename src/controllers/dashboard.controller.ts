@@ -7,6 +7,9 @@ import {
   getDailyOrdersAnalyticsDashboardService,
   getCategoryBreakdownAnalyticsDashboardService,
   getTopAuthorsAnalyticsDashboardService,
+  getTopSellersAnalyticsDashboardService,
+  getTopSellingBooksAnalyticsDashboardService,
+  getOrderHealthAnalyticsDashboardService,
 } from "../services/dashboard.service.js";
 import type {
   SellerDashboardRecentOrdersQueryInput,
@@ -14,14 +17,17 @@ import type {
   DailyOrdersAnalyticsQueryInput,
   CategoryBreakdownAnalyticsQueryInput,
   TopAuthorsAnalyticsQueryInput,
+  TopSellersAnalyticsQueryInput,
+  TopSellingBooksAnalyticsQueryInput,
+  OrderHealthAnalyticsQueryInput,
 } from "../validation/dashboard.schema.js";
 
 export const getSellerRecentOrders = asyncHandler(async (req, res) => {
-  const sellerId = req.user!.id;
+  const userContext = req.user!;
   const query = req.query as unknown as SellerDashboardRecentOrdersQueryInput;
 
   const { summary, recentOrders, meta } =
-    await getSellerRecentOrdersDashboardService(sellerId, query);
+    await getSellerRecentOrdersDashboardService(userContext, query);
 
   apiResponse(
     res,
@@ -36,10 +42,10 @@ export const getSellerRecentOrders = asyncHandler(async (req, res) => {
 });
 
 export const getSellerRevenueAnalytics = asyncHandler(async (req, res) => {
-  const sellerId = req.user!.id;
+  const userContext = req.user!;
   const query = req.query as unknown as SellerRevenueAnalyticsQueryInput;
 
-  const data = await getSellerRevenueAnalyticsService(sellerId, query);
+  const data = await getSellerRevenueAnalyticsService(userContext, query);
 
   apiResponse(
     res,
@@ -100,6 +106,46 @@ export const getTopAuthorsAnalytics = asyncHandler(async (req, res) => {
     data,
   );
 });
+
+export const getTopSellersAnalytics = asyncHandler(async (req, res) => {
+  const query = req.query as unknown as TopSellersAnalyticsQueryInput;
+
+  const data = await getTopSellersAnalyticsDashboardService(query);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Top sellers analytics retrieved successfully",
+    data,
+  );
+});
+
+export const getTopSellingBooksAnalytics = asyncHandler(async (req, res) => {
+  const query = req.query as unknown as TopSellingBooksAnalyticsQueryInput;
+
+  const data = await getTopSellingBooksAnalyticsDashboardService(query);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Top selling books analytics retrieved successfully",
+    data,
+  );
+});
+
+export const getOrderHealthAnalytics = asyncHandler(async (req, res) => {
+  const query = req.query as unknown as OrderHealthAnalyticsQueryInput;
+
+  const data = await getOrderHealthAnalyticsDashboardService(query);
+
+  apiResponse(
+    res,
+    HTTP_STATUS.OK,
+    "Order health analytics retrieved successfully",
+    data,
+  );
+});
+
 
 
 

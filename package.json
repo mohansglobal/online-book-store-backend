@@ -36,7 +36,8 @@
     "test:author-pagination": "node --import tsx src/scripts/test-author-pagination-and-asce.ts",
     "test:newsletter": "tsx src/scripts/test-newsletter-api.ts",
     "test:pdf-invoice": "tsx src/scripts/test-pdf-invoice.ts",
-    "test:cms": "tsx src/scripts/test-cms-content-api.ts"
+    "test:cms": "tsx src/scripts/test-cms-content-api.ts",
+    "test:order-health": "tsx src/scripts/test-order-health-analytics.ts"
   },
   "keywords": [],
   "author": "",
