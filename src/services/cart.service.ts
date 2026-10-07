@@ -12,6 +12,7 @@ import type {
   UpdateCartItemInput,
 } from "../validation/cart.schema.js";
 import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
+import { resolveListingPricing } from "../utils/pricing.util.js";
 
 export const getCartService = async (userId: string) => {
   let cart: any = await CartModel.findOne({ user: userId })
@@ -60,11 +61,18 @@ export const getCartService = async (userId: string) => {
         isAvailable: false,
         quantity: item.quantity,
         priceInPaise: 0,
+        priceInRupees: 0,
+        mrpInPaise: 0,
+        mrpInRupees: 0,
+        discountPercentage: 0,
+        isDiscountActive: false,
         subtotalInPaise: 0,
+        subtotalInRupees: 0,
       };
     }
 
-    const priceInPaise = listing.sellingPriceInPaise || 0;
+    const pricing = resolveListingPricing(listing);
+    const priceInPaise = pricing.effectivePriceInPaise;
     const subtotalInPaise = priceInPaise * item.quantity;
     const isAvailable = listing.isActive && listing.stock >= item.quantity;
 
@@ -80,9 +88,9 @@ export const getCartService = async (userId: string) => {
       customImages,
     );
 
-    const priceInRupees = Math.round(priceInPaise / 100);
-    const mrpInPaise = listing.mrpInPaise ?? priceInPaise;
-    const mrpInRupees = Math.round(mrpInPaise / 100);
+    const priceInRupees = pricing.price;
+    const mrpInPaise = pricing.mrpInPaise;
+    const mrpInRupees = pricing.mrp;
     const subtotalInRupees = Math.round(subtotalInPaise / 100);
 
     return {
@@ -92,6 +100,8 @@ export const getCartService = async (userId: string) => {
       priceInRupees,
       mrpInPaise,
       mrpInRupees,
+      discountPercentage: pricing.discountPercentage,
+      isDiscountActive: pricing.isDiscountActive,
       subtotalInPaise,
       subtotalInRupees,
       stockAvailable: listing.stock,

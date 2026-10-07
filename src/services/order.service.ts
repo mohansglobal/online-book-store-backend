@@ -1423,7 +1423,8 @@ export const initiateRazorpayOrderService = async (
         HTTP_STATUS.BAD_REQUEST,
       );
     }
-    subtotalInPaise += listing.sellingPriceInPaise * item.quantity;
+    const pricing = resolveListingPricing(listing);
+    subtotalInPaise += pricing.effectivePriceInPaise * item.quantity;
   }
 
   let deliveryChargeInPaise = 0;

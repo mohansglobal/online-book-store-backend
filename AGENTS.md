@@ -1,1300 +1,206 @@
-## Purpose
+# Backend Agent Rules
 
-This file defines the coding rules for the Node.js backend.
+## Project
 
-The main goal is simple:
+Node.js 22+, Express 5+, TypeScript strict mode, MongoDB/Mongoose, Zod, Pino.
 
-> Write boring, predictable code that another developer can understand quickly.
+Frontend is Next.js.
+Backend owns authentication, authorization, business rules, prices,
+discounts, stock, orders, payments and database operations.
 
-Do not try to write impressive code.
+## Code Style
 
-Do not optimize for fewer lines.
+Write boring, explicit, predictable code.
 
-Do not hide multiple steps inside one expression.
+- Prefer readable steps over clever one-liners.
+- Use meaningful variable and function names.
+- Use early returns instead of deep nesting.
+- Avoid nested ternaries and large chained expressions.
+- Do not create variables for obvious values.
+- Do not extract tiny helpers unless they represent a real concept.
+- Prefer functions over classes unless instance state is required.
+- Do not introduce abstractions before they are needed.
+- Do not optimize for fewer lines.
 
-Default coding style: Prefer 2–5 simple readable statements over one complex statement. Give intermediate business values meaningful names. A reader should not need to mentally execute an expression to understand what it does.
+For important business calculations, name intermediate values.
 
-For example, prefer:
+## Data Contracts
 
-const unitPrice = listing.sellingPriceInPaise;
-const quantity = item.quantity;
+Never guess properties using chains such as:
 
-const subtotal = unitPrice * quantity;
-const discount = calculateDiscount(subtotal);
-const total = subtotal - discount;
+order.name || order.customerName || order.user?.name
 
-instead of:
+Use the known API property directly.
 
-const total =
-  listing.sellingPriceInPaise * item.quantity -
-  calculateDiscount(listing.sellingPriceInPaise * item.quantity);
+A simple display fallback is allowed:
 
+order.customerName || "-"
 
-# No Property Guessing
+Use `??` when 0, false or empty string are valid values.
 
-Do not guess which property contains the real value by chaining several possible fields.
+If APIs have different shapes, normalize them once at the boundary.
 
-Avoid:
-
-```ts
-const name =
-  order.name ||
-  order.customerName ||
-  order.userName ||
-  order.fullName ||
-  "-";
-```
-
-Avoid:
-
-```ts
-const id =
-  order._id ||
-  order.orderId ||
-  order.id ||
-  order.slug ||
-  "";
-```
-
-This hides an unclear data contract.
-
-Know which property the API returns and use that property directly.
-
-Prefer:
-
-```ts
-const customerName = order.customerName;
-```
-
-If the value is only needed for display, a simple display fallback is allowed:
-
-```ts
-const customerName = order.customerName || "-";
-```
-
-Or:
-
-```tsx
-<p>{order.customerName || "-"}</p>
-```
-
-For nullable values where `0`, `false`, or an empty string may be valid, prefer `??`:
-
-```ts
-const stock = order.stock ?? 0;
-```
-
-Do not write:
-
-```ts
-const stock = order.stock || 0;
-```
-
-when `0` is a meaningful value.
-
-## API Shape Differences
-
-If different API responses genuinely have different property names, normalize them once at the boundary.
-
-Example:
-
-```ts
-const customerName = apiOrder.customerName;
-
-return {
-  customerName,
-};
-```
-
-Then the rest of the application uses only:
-
-```ts
-order.customerName
-```
-
-Do not repeat compatibility fallbacks throughout components:
-
-```ts
-order.customerName ||
-order.name ||
-order.user?.name ||
-order.customer?.name ||
-"-"
-```
-
-If legacy compatibility is required, keep it inside one clearly named normalization function and document the precedence.
-
-## Rule
-
-Use:
-
-```text
-one known property
-+
-one simple display fallback when needed
-```
-
-Prefer:
-
-```ts
-order.name || "-"
-```
-
-over:
-
-```ts
-order.name ||
-order.fullName ||
-order.customerName ||
-order.user?.name ||
-order.profile?.name ||
-"-"
-```
-
-Multiple property fallbacks usually mean the data contract needs to be fixed or normalized.
-
-
-
-
-# 1. Stack
-
-```text
-Node.js 22+
-Express 5+
-TypeScript strict mode
-MongoDB
-Mongoose
-Zod
-Pino
-```
-
-The Next.js application is the frontend.
-
-The Node.js API is responsible for:
-
-```text
-authentication
-authorization
-business rules
-prices
-discounts
-stock
-orders
-payments
-database operations
-```
-
----
-
-# 2. Most Important Code Style Rule
-
-Prefer explicit steps.
-
-Bad:
-
-```ts
-const total = items.reduce(
-  (sum, item) => sum + item.price * item.quantity,
-  0,
-);
-```
-
-If the calculation is important to the business, prefer code where every important value has a name:
-
-```ts
-let total = 0;
-
-for (const item of items) {
-  const itemPrice = item.price;
-  const quantity = item.quantity;
-  const itemTotal = itemPrice * quantity;
-
-  total += itemTotal;
-}
-```
-
-The second version is longer.
-
-That is okay.
-
-It is easier to debug and easier to modify.
-
----
-
-# 3. Prefer Named Variables
-
-When an expression contains multiple pieces of information, name them.
-
-Avoid:
-
-```ts
-await Order.create({
-  user: req.user.id,
-  total: items.reduce((sum, item) => sum + item.price * item.quantity, 0),
-});
-```
-
-Prefer:
-
-```ts
-const userId = req.user.id;
-
-const orderTotal = calculateOrderTotal(items);
-
-const order = await Order.create({
-  user: userId,
-  total: orderTotal,
-});
-```
-
-Another example:
-
-Avoid:
-
-```ts
-const skip = (Number(req.query.page || 1) - 1) * Number(req.query.limit || 20);
-```
-
-Prefer:
-
-```ts
-const page = Number(req.query.page || 1);
-const limit = Number(req.query.limit || 20);
-const skip = (page - 1) * limit;
-```
-
-A developer should be able to immediately see what each value represents.
-
----
-
-# 4. Do Not Create Variables for Everything
-
-Named variables should improve understanding.
-
-Do not make obvious code unnecessarily noisy.
-
-This is fine:
-
-```ts
-user.isActive = true;
-```
-
-Do not write:
-
-```ts
-const activeStatus = true;
-
-user.isActive = activeStatus;
-```
-
-Use a variable when:
-
-```text
-the value has business meaning
-the expression is difficult to read
-the value is reused
-the value helps debugging
-the next developer benefits from knowing its name
-```
-
----
-
-# 5. Avoid Clever One-Liners
-
-Avoid code that performs several operations at once.
-
-Avoid:
-
-```ts
-const user = id && (await User.findById(id)) || null;
-```
-
-Prefer:
-
-```ts
-if (!id) {
-  return null;
-}
-
-const user = await User.findById(id);
-
-return user;
-```
-
-Avoid nested ternaries:
-
-```ts
-const status = paid ? shipped ? "shipped" : "paid" : "pending";
-```
-
-Prefer:
-
-```ts
-let status = "pending";
-
-if (paid) {
-  status = "paid";
-}
-
-if (shipped) {
-  status = "shipped";
-}
-```
-
----
-
-# 6. Prefer Simple Control Flow
-
-Use early returns.
-
-Avoid:
-
-```ts
-if (user) {
-  if (user.isActive) {
-    if (user.role === "seller") {
-      // logic
-    }
-  }
-}
-```
-
-Prefer:
-
-```ts
-if (!user) {
-  throw new AppError("User not found", 404);
-}
-
-if (!user.isActive) {
-  throw new AppError("User is inactive", 403);
-}
-
-if (user.role !== "seller") {
-  throw new AppError("Forbidden", 403);
-}
-
-// logic
-```
-
-Try to read functions from top to bottom.
-
----
-
-# 7. A Function Should Look Like Steps
-
-Business functions should normally look like this:
-
-```text
-1. validate required state
-2. load required data
-3. check business rules
-4. perform calculation
-5. update database
-6. return result
-```
-
-Example:
-
-```ts
-export const cancelOrder = async (
-  orderId: string,
-  userId: string,
-  reason: string,
-) => {
-  const order = await Order.findById(orderId);
-
-  if (!order) {
-    throw new AppError("Order not found", 404);
-  }
-
-  const belongsToUser = order.user.toString() === userId;
-
-  if (!belongsToUser) {
-    throw new AppError("Forbidden", 403);
-  }
-
-  const canCancel = CANCELLABLE_STATUSES.includes(order.status);
-
-  if (!canCancel) {
-    throw new AppError("Order cannot be cancelled", 400);
-  }
-
-  order.status = "cancelled";
-  order.cancellationReason = reason;
-
-  await order.save();
-
-  return order;
-};
-```
-
-Someone reading the function should understand the flow without jumping between five helper files.
-
----
-
-# 8. Do Not Extract Tiny Helpers Without Reason
-
-Avoid:
-
-```ts
-const getUserId = (user: User) => user.id;
-
-const getOrderId = (order: Order) => order.id;
-
-const isOrderActive = (order: Order) => order.status === "active";
-```
-
-when they are used only once and add no meaning.
-
-Helpers should represent real concepts.
-
-Good:
-
-```ts
-calculateOrderTotal()
-reserveInventory()
-verifyPaymentSignature()
-canCancelOrder()
-calculateDiscount()
-```
-
----
-
-# 9. Functions Over Classes
-
-Use functions by default.
-
-Prefer:
-
-```ts
-export const createOrder = async () => {};
-
-export const cancelOrder = async () => {};
-
-export const getOrderById = async () => {};
-```
-
-Do not create:
-
-```ts
-class OrderService {}
-```
-
-just to group functions.
-
-Use classes only when instance state or dependency lifecycle actually requires them.
-
----
-
-# 10. Keep Architecture Simple
+## Architecture
 
 Preferred flow:
 
-```text
 Route
-  ↓
-Validation / Auth
-  ↓
-Controller
-  ↓
-Service
-  ↓
-Mongoose Model
-```
+→ validation/auth
+→ controller
+→ service
+→ Mongoose model
 
-Do not add extra layers unless necessary.
+Routes:
+- connect HTTP concerns only
+- no business logic or database queries
 
-Do not automatically create:
+Controllers:
+- read input/current user
+- call service
+- return response
 
-```text
-repositories
-base services
-base controllers
-factories
-dependency injection containers
-CQRS
-event buses
-microservices
-```
+Services:
+- contain business logic
+- may query models, calculate values, check ownership/stock and use transactions
+- must not receive Express Request/Response/NextFunction
 
----
+Do not introduce repositories, base services/controllers, DI containers,
+CQRS, event buses or microservices unless there is a concrete need.
 
-# 11. Routes
+## TypeScript
 
-Routes only connect HTTP pieces.
+- Keep strict mode enabled.
+- Avoid `any`; prefer `unknown` and narrow it.
+- Let TypeScript infer obvious local types.
+- Explicitly type important boundaries and complex domain structures.
 
-Good:
+## Validation
 
-```ts
-router.post(
-  "/",
-  authenticate,
-  authorize("seller"),
-  validate(createBookSchema),
-  createBook,
-);
-```
+Validate incoming body, params and query data with Zod.
 
-Routes must not contain:
+Zod validates structure.
+Services enforce business rules.
 
-```text
-database queries
-price calculations
-business rules
-payment logic
-stock updates
-```
+## MongoDB
 
----
+Never pass raw user input directly into MongoDB queries.
 
-# 12. Controllers
+Build filters and updates explicitly.
 
-Controllers should be boring.
+Never blindly use:
 
-Usually:
+User.findByIdAndUpdate(id, req.body)
 
-```text
-get input
-get current user
-call service
-return response
-```
+Expose editable fields explicitly.
 
-Example:
+## Orders / Money / Inventory
 
-```ts
-export const createBook = asyncHandler(async (req, res) => {
-  const sellerId = req.user.id;
-  const input = req.body;
+Never trust frontend values for:
 
-  const book = await createBookService({
-    sellerId,
-    ...input,
-  });
+- prices
+- totals
+- discounts
+- stock
+- seller ownership
+- payment status
+- order status
+- permissions
 
-  res.status(201).json({
-    success: true,
-    message: "Book created successfully",
-    data: book,
-  });
-});
-```
+Backend calculates authoritative values.
 
-Do not put major business logic inside controllers.
+Use clearly named intermediate variables for money calculations.
 
----
+Inventory changes during checkout must be atomic and must never allow
+negative stock.
 
-# 13. Services
+Use MongoDB transactions only when multiple writes must succeed or fail
+together. Keep transactions short and avoid network calls inside them.
 
-Services contain business logic.
+## Errors / Async
 
-Services may:
+Use centralized error handling and `AppError` for expected errors.
 
-```text
-query models
-check ownership
-calculate prices
-check stock
-handle transactions
-coordinate multiple models
-call external services
-throw AppError
-```
+Do not return HTTP responses from service logic.
+Do not add try/catch everywhere or swallow errors.
 
-Services must not receive:
+Use async/await.
 
-```text
-Request
-Response
-NextFunction
-```
+Do not use async callbacks with `forEach`.
 
-Bad:
+Use sequential loops when order matters and `Promise.all` only for genuinely
+independent operations.
 
-```ts
-createOrderService(req, res);
-```
+## Security
 
-Good:
+Never log passwords, JWTs, refresh tokens, cookies, OTPs, payment secrets
+or database credentials.
 
-```ts
-createOrderService({
-  userId,
-  shippingAddressId,
-  paymentMethod,
-});
-```
+Always verify roles, permissions, ownership, prices, stock and payment
+state on the backend.
 
----
+## Changing Existing Code
 
-# 14. TypeScript
+Before editing:
 
-Keep strict mode enabled.
+1. Understand the existing implementation.
+2. Inspect affected callers/callees.
+3. Reuse existing utilities/types/validation.
+4. Make the smallest required change.
+5. Preserve unrelated behavior.
 
-Do not use:
+Do not create new architecture unless required.
 
-```ts
-any
-```
+## Testing
 
-unless there is an exceptional reason.
+Test-created records must use `test_` or `[TEST]` identifiers.
+
+Always clean test data after testing, including failed runs.
+Use `try/finally` where appropriate.
+
+A task is complete only when relevant checks have actually been run:
+
+- TypeScript/typecheck
+- lint
+- relevant tests
+- final git diff review
+
+Never claim a check passed unless it was executed.
+If something was not checked, say:
+
+`Not verified: <reason>`
+
+## Codebase Navigation
+
+Prefer Serena for code exploration.
+
+- Use `find_symbol` for implementations.
+- Use `find_referencing_symbols` for callers/usages.
+- Use `get_symbols_overview` before reading large files.
+- Prefer symbol-level retrieval over whole-file reads.
+- Read full files only when necessary.
+- Use broad repository search only when symbol lookup is insufficient.
+
+If `.codegraph/` exists, CodeGraph may be used for dependency/call-path
+analysis before broad grep/find searches.
+
+## Final Rule
 
 Prefer:
 
-```ts
-unknown
-```
-
-and narrow it.
-
-Avoid unnecessary type declarations:
-
-```ts
-const name: string = "Mohan";
-```
-
-Prefer:
-
-```ts
-const name = "Mohan";
-```
-
-Type important boundaries:
-
-```text
-service inputs
-API inputs
-external API responses
-shared domain structures
-complex return values
-```
-
----
-
-# 15. Validation
-
-Validate all incoming data using Zod.
-
-Validate:
-
-```text
-body
-params
-query
-environment variables
-external payloads when important
-```
-
-Zod handles structure.
-
-Services handle business rules.
-
-Example:
-
-Zod:
-
-```text
-quantity must be positive
-email must be valid
-title is required
-```
-
-Service:
-
-```text
-book does not exist
-stock is insufficient
-coupon expired
-seller does not own listing
-order cannot be cancelled
-```
-
----
-
-# 16. MongoDB Queries
-
-Never directly use user input as a MongoDB query.
-
-Bad:
-
-```ts
-Book.find(req.query);
-```
-
-Build the filter explicitly:
-
-```ts
-const filter: FilterQuery<Book> = {};
-
-if (categoryId) {
-  filter.category = categoryId;
-}
-
-if (publisherId) {
-  filter.publisher = publisherId;
-}
-```
-
-This is intentionally boring.
-
-Keep it that way.
-
----
-
-# 17. Updates
-
-Never blindly update using the request body.
-
-Bad:
-
-```ts
-User.findByIdAndUpdate(userId, req.body);
-```
-
-Prefer:
-
-```ts
-const update = {
-  name: input.name,
-  phoneNumber: input.phoneNumber,
-};
-
-const user = await User.findByIdAndUpdate(
-  userId,
-  update,
-  { new: true },
-);
-```
-
-Make editable fields visible in the code.
-
----
-
-# 18. Prices and Orders
-
-Never trust totals from the frontend.
-
-Frontend may send:
-
-```text
-listingId
-quantity
-couponCode
-shippingAddressId
-paymentMethod
-```
-
-Backend calculates:
-
-```text
-current price
-discount
-subtotal
-shipping
-tax
-total
-stock availability
-seller
-payment status
-order status
-```
-
-Important calculations should use clearly named variables.
-
-Example:
-
-```ts
-const unitPrice = listing.sellingPriceInPaise;
-const quantity = cartItem.quantity;
-
-const subtotal = unitPrice * quantity;
-const discount = calculateDiscount(subtotal, coupon);
-const total = subtotal - discount;
-```
-
-Prefer this over hiding everything inside one expression.
-
----
-
-# 19. Inventory
-
-Inventory updates must be atomic.
-
-Do not:
-
-```ts
-listing.stock -= quantity;
-await listing.save();
-```
-
-for checkout.
-
-Prefer a conditional database update:
-
-```ts
-const updatedListing = await BookListing.findOneAndUpdate(
-  {
-    _id: listingId,
-    stock: { $gte: quantity },
-  },
-  {
-    $inc: {
-      stock: -quantity,
-    },
-  },
-  {
-    new: true,
-  },
-);
-```
-
-Never allow stock to become negative.
-
----
-
-# 20. Transactions
-
-Use MongoDB transactions only when multiple writes must succeed or fail together.
-
-Examples:
-
-```text
-create order + reduce stock
-payment success + update order
-refund + payment state update
-```
-
-Do not use transactions for ordinary independent writes.
-
-Keep transactions short.
-
-Do not perform slow network requests inside a transaction.
-
----
-
-# 21. Errors
-
-Use centralized error handling.
-
-Expected errors:
-
-```ts
-throw new AppError("Book not found", 404);
-```
-
-Do not return HTTP responses from deep service logic.
-
-Do not write `try/catch` everywhere.
-
-Do not swallow errors.
-
----
-
-# 22. Async Code
-
-Use `async/await`.
+- named variables
+- visible steps
+- early returns
+- clear conditions
+- explicit validation
+- straightforward queries
+- small responsibilities
 
 Avoid:
 
-```ts
-items.forEach(async (item) => {
-  await processItem(item);
-});
-```
-
-Sequential:
-
-```ts
-for (const item of items) {
-  await processItem(item);
-}
-```
-
-Independent small operations:
-
-```ts
-await Promise.all(
-  items.map((item) => processItem(item)),
-);
-```
-
-Do not use concurrency just because it looks faster.
-
----
-
-# 23. Naming
-
-Use names that explain the value.
-
-Good:
-
-```ts
-const userId = req.user.id;
-const listingId = input.listingId;
-const quantity = input.quantity;
-const availableStock = listing.stock;
-const unitPrice = listing.sellingPriceInPaise;
-const orderTotal = subtotal - discount;
-```
-
-Avoid:
-
-```ts
-const a = req.user.id;
-const d = input.listingId;
-const x = listing.stock;
-const temp = subtotal - discount;
-```
-
-Functions should describe actions:
-
-```text
-createOrder
-cancelOrder
-findBookById
-reserveInventory
-calculateOrderTotal
-verifyPayment
-```
-
-Avoid:
-
-```text
-handle
-process
-doStuff
-manager
-helper
-func
-```
-
----
-
-# 24. Comments
-
-Code should explain WHAT.
-
-Comments should explain WHY.
-
-Bad:
-
-```ts
-// Find the order
-const order = await Order.findById(orderId);
-```
-
-Good:
-
-```ts
-// Recheck stock because cart quantities may be stale by checkout time.
-const listing = await BookListing.findById(listingId);
-```
-
-Do not comment obvious code.
-
----
-
-# 25. File and Function Size
-
-Do not chase arbitrary line counts.
-
-Split code when responsibilities are different.
-
-Do not split:
-
-```text
-one understandable 180-line service
-```
-
-into:
-
-```text
-six tiny files
-```
-
-just to make the line count smaller.
-
-Likewise, do not allow one function to perform five unrelated jobs.
-
----
-
-# 26. Reusability
-
-Do not duplicate real business logic.
-
-Good reusable concepts:
-
-```text
-calculateOrderTotal
-calculateDiscount
-parsePagination
-verifyPaymentSignature
-reserveInventory
-generateSlug
-```
-
-But do not create abstractions before duplication exists.
-
-First write the straightforward implementation.
-
-Refactor when there is an actual reason.
-
----
-
-# 27. Dependencies
-
-Before installing a package:
-
-```text
-check whether the project already solves it
-check whether Node.js can solve it
-check whether the package materially simplifies the code
-```
-
-Do not install packages for tiny utilities.
-
-Do not introduce two libraries that solve the same problem.
-
----
-
-# 28. Security
-
-Never trust the frontend for:
-
-```text
-roles
-permissions
-prices
-stock
-seller ownership
-discounts
-payment status
-order status
-```
-
-Always verify them on the backend.
-
-Never log:
-
-```text
-passwords
-JWTs
-refresh tokens
-cookies
-OTP values
-payment secrets
-database credentials
-```
-
----
-
-# 29. Before Writing Code
-
-Before changing a feature:
-
-```text
-read the existing code
-understand the current structure
-reuse existing utilities
-check existing types
-check existing validation
-make the smallest required change
-```
-
-Do not begin by creating new architecture.
-
----
-
-# 30. While Writing Code
-
-Prefer code that looks like this:
-
-```ts
-const userId = user.id;
-const listingId = input.listingId;
-const quantity = input.quantity;
-
-const listing = await BookListing.findById(listingId);
-
-if (!listing) {
-  throw new AppError("Listing not found", 404);
-}
-
-const hasEnoughStock = listing.stock >= quantity;
-
-if (!hasEnoughStock) {
-  throw new AppError("Insufficient stock", 400);
-}
-
-const unitPrice = listing.sellingPriceInPaise;
-const subtotal = unitPrice * quantity;
-
-return {
-  listingId,
-  quantity,
-  unitPrice,
-  subtotal,
-};
-```
-
-Not code that compresses all of those concepts into one expression.
-
----
-
-# 31. Avoid These Patterns
-
-Avoid unless there is a real reason:
-
-```text
-clever one-liners
-nested ternaries
-deep nesting
-huge chained expressions
-single-letter variables
-generic helpers
-generic repositories
-BaseService
-BaseController
-classes without state
-premature abstractions
-premature caching
-premature Redis
-premature microservices
-raw req.body updates
-raw req.query MongoDB queries
-business logic in routes
-business logic hidden in model hooks
-console.log everywhere
-any everywhere
-```
-
----
-
-# 32. Final Decision Rule
-
-When choosing between:
-
-```ts
-const total = items.reduce(
-  (sum, { price, quantity }) => sum + price * quantity,
-  0,
-);
-```
-
-and:
-
-```ts
-let total = 0;
-
-for (const item of items) {
-  const price = item.price;
-  const quantity = item.quantity;
-  const itemTotal = price * quantity;
-
-  total += itemTotal;
-}
-```
-
-prefer the second version when this is important business logic.
-
-It is longer.
-
-It is also easier to:
-
-```text
-read
-debug
-change
-log
-test
-review
-```
-
-That is more important than saving lines.
-
----
-
-# 33. Test Data Naming and Cleanup
-
-When creating data for tests or verification scripts:
-
-1. **Clear Test Names**: Any test data added (books, listings, users, orders, categories, etc.) must have names or identifiers prefixed with `test_` or `[TEST]` (e.g., `test_user_...`, `test_book_...`) so it is immediately obvious that the data is for testing.
-2. **Mandatory Cleanup**: After testing is completed (whether successful or failed), always delete all created test data from the database.
-3. **No Orphan Data**: Never leave leftover test records behind in the database after a test run. Use `try ... finally` blocks in test scripts to guarantee cleanup always executes.
-
----
-
-# Definition of Done
-
-A coding task is not complete until:
-
-1. The relevant existing implementation was inspected.
-2. Callers/callees affected by the change were considered.
-3. The smallest appropriate change was made.
-4. Existing behavior outside the requested scope was preserved.
-5. Relevant tests were added or updated when appropriate.
-6. TypeScript/typecheck passes.
-7. Lint passes.
-8. Relevant tests pass.
-9. The final git diff was reviewed.
-10. No unrelated files were changed.
-11. No test, validation, security check, or type safety was weakened to make the task pass.
-
-Never claim any verification succeeded unless it was actually executed.
-
-If something could not be verified, explicitly say:
-"Not verified: <reason>".
-
-# Final Rule
-
-Write code that looks boring.
-
-Prefer:
-
-```text
-named variables
-visible steps
-early returns
-small responsibilities
-clear conditions
-explicit validation
-simple loops
-predictable files
-straightforward database queries
-```
-
-over:
-
-```text
-one-liners
-clever syntax
-hidden behavior
-magic abstractions
-deep nesting
-compressed expressions
-unnecessary patterns
-```
-
-A developer should be able to open the code and understand:
-
-```text
-what came in
-what was checked
-what was calculated
-what changed
-what was returned
-```
-
-without needing the original developer to explain it.
-
-<!-- CODEGRAPH_START -->
-## CodeGraph
-
-In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the repo root), reach for it BEFORE grep/find or reading files when you need to understand or locate code:
-
-- **MCP tool** (when available): `codegraph_explore` answers most code questions in one call — the relevant symbols' verbatim source plus the call paths between them, including dynamic-dispatch hops grep can't follow. Name a file or symbol in the query to read its current line-numbered source. If it's listed but deferred, load it by name via tool search.
-- **Shell** (always works): `codegraph explore "<symbol names or question>"` prints the same output.
-
-If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
-<!-- CODEGRAPH_END -->
+- clever one-liners
+- deep nesting
+- hidden behavior
+- magic abstractions
+- premature optimization
+- unnecessary dependencies
+- unrelated changes

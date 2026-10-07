@@ -7,7 +7,11 @@
         "--context=antigravity",
         "--project",
         "C:\\Users\\PC\\OneDrive\\Desktop\\onlineBookStore\\online-book-store\\online-book-store-backend"
-      ]
+      ],
+      "env": {
+        "PYTHONUTF8": "1",
+        "PYTHONIOENCODING": "utf-8"
+      }
     }
   }
 }

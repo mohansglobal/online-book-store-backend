@@ -13,6 +13,7 @@ import { PublisherModel } from "../models/publisher.model.js";
 import { CategoryModel } from "../models/category.model.js";
 import { CountryModel } from "../models/country.model.js";
 import { resolveCountryId } from "./country.service.js";
+import { resolveListingPricing } from "../utils/pricing.util.js";
 import {
   getBatchListingRatingStats,
   getListingRatingFromMap,
@@ -249,18 +250,16 @@ export const getBooksService = async (query: BookQueryInput) => {
       images: resolvedImages.images,
       effectiveImages: resolvedImages.effectiveImages,
       listingImages: customImages,
-      price: Math.round(listing.sellingPriceInPaise / 100),
-      priceInPaise: listing.sellingPriceInPaise,
-      mrp: Math.round(listing.mrpInPaise / 100),
-      mrpInPaise: listing.mrpInPaise,
-      discountPercentage:
-        listing.mrpInPaise > 0
-          ? Math.round(
-              ((listing.mrpInPaise - listing.sellingPriceInPaise) /
-                listing.mrpInPaise) *
-                100,
-            )
-          : 0,
+      price: resolveListingPricing(listing).price,
+      priceInPaise: resolveListingPricing(listing).effectivePriceInPaise,
+      sellingPrice: resolveListingPricing(listing).sellingPrice,
+      sellingPriceInPaise: resolveListingPricing(listing).sellingPriceInPaise,
+      effectivePrice: resolveListingPricing(listing).effectivePrice,
+      effectivePriceInPaise: resolveListingPricing(listing).effectivePriceInPaise,
+      mrp: resolveListingPricing(listing).mrp,
+      mrpInPaise: resolveListingPricing(listing).mrpInPaise,
+      discountPercentage: resolveListingPricing(listing).discountPercentage,
+      isDiscountActive: resolveListingPricing(listing).isDiscountActive,
       stock: listing.stock,
       sku: listing.sku,
       seller: listing.seller,
@@ -363,19 +362,25 @@ export const getBookByIdOrSlugService = async (
       sellerId,
     );
 
+    const pricing = resolveListingPricing(listing);
     return {
       ...listing,
       coverImage: resolvedListingImages.coverImage,
       images: resolvedListingImages.images,
       effectiveImages: resolvedListingImages.effectiveImages,
-      discountPercentage:
-        listing.mrpInPaise > 0
-          ? Math.round(
-              ((listing.mrpInPaise - listing.sellingPriceInPaise) /
-                listing.mrpInPaise) *
-                100,
-            )
-          : 0,
+      price: pricing.price,
+      priceInPaise: pricing.effectivePriceInPaise,
+      sellingPrice: pricing.sellingPrice,
+      sellingPriceInPaise: pricing.sellingPriceInPaise,
+      effectivePrice: pricing.effectivePrice,
+      effectivePriceInPaise: pricing.effectivePriceInPaise,
+      mrp: pricing.mrp,
+      mrpInPaise: pricing.mrpInPaise,
+      discountPercentage: pricing.discountPercentage,
+      isDiscountActive: pricing.isDiscountActive,
+      discountStatus: pricing.discountStatus,
+      discountSchedule: pricing.discountSchedule,
+      activeDiscount: pricing.activeDiscount,
       rating: sellerRatingInfo.rating,
       averageRating: sellerRatingInfo.averageRating,
       ratingCount: sellerRatingInfo.ratingCount,

@@ -11,6 +11,7 @@ import { AppError } from "../utils/app-error.js";
 import { HTTP_STATUS } from "../constants/http-status.js";
 import { logger } from "../utils/logger.js";
 import { getMergedAndShuffledBookImages } from "../utils/image.helper.js";
+import { resolveListingPricing } from "../utils/pricing.util.js";
 import type {
   AddToWishlistInput,
   SyncWishlistInput,
@@ -80,10 +81,11 @@ export const getWishlistService = async (userId: string) => {
       const totalStock = bookListings.reduce((sum, l) => sum + (l.stock || 0), 0);
       const inStock = totalStock > 0;
 
-      const priceInPaise = bestListing?.sellingPriceInPaise ?? 0;
-      const mrpInPaise = bestListing?.mrpInPaise ?? priceInPaise;
-      const priceInRupees = Math.round(priceInPaise / 100);
-      const mrpInRupees = Math.round(mrpInPaise / 100);
+      const pricing = bestListing ? resolveListingPricing(bestListing) : null;
+      const priceInPaise = pricing?.effectivePriceInPaise ?? bestListing?.sellingPriceInPaise ?? 0;
+      const mrpInPaise = pricing?.mrpInPaise ?? bestListing?.mrpInPaise ?? priceInPaise;
+      const priceInRupees = pricing?.price ?? Math.round(priceInPaise / 100);
+      const mrpInRupees = pricing?.mrp ?? Math.round(mrpInPaise / 100);
 
       const customImages = bestListing?.listingImages ?? [];
       const resolvedImages = getMergedAndShuffledBookImages(
